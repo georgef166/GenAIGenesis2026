@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:ar_flutter_plugin_2/ar_flutter_plugin.dart';
 import 'package:ar_flutter_plugin_2/datatypes/config_planedetection.dart';
 import 'package:ar_flutter_plugin_2/datatypes/hittest_result_types.dart';
@@ -18,6 +20,7 @@ import 'package:vector_math/vector_math_64.dart' hide Colors;
 // Asset path
 // ---------------------------------------------------------------------------
 const _rocketModelAssetPath = 'assets/models/saturn_v_-_nasa/scene.gltf';
+const _iosPluginModelScaleCompensation = 100.0;
 
 const _backgroundColor = Color(0xFF05070B);
 
@@ -66,6 +69,13 @@ class _ARRocketPageState extends State<ARRocketPage>
   bool _hasInitializedSession = false;
   bool _isConfiguringSession = false;
   int _planeCount = 0;
+
+  Vector3 get _rocketScale =>
+      Platform.isIOS
+          ? Vector3(0.2 * _iosPluginModelScaleCompensation,
+              0.2 * _iosPluginModelScaleCompensation,
+              0.2 * _iosPluginModelScaleCompensation)
+          : Vector3(0.2, 0.2, 0.2);
 
   @override
   void initState() {
@@ -301,7 +311,7 @@ class _ARRocketPageState extends State<ARRocketPage>
       final node = ARNode(
         type: NodeType.localGLTF2,
         uri: _rocketModelAssetPath,
-        scale: Vector3(0.2, 0.2, 0.2),
+        scale: _rocketScale,
         position: Vector3(0.0, 0.0, 0.0),
         rotation: Vector4(1.0, 0.0, 0.0, 0.0),
       );

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'src/ar_meshy_page.dart';
 import 'src/ar_rocket_page.dart';
+import 'src/ar_diagram_page.dart';
 
 const _backgroundColor = Color(0xFF05070B);
 
@@ -58,9 +59,9 @@ class HomePage extends StatelessWidget {
                 'Choose an AR Experience',
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w600,
-                    ),
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
               const SizedBox(height: 48),
               _FeatureCard(
@@ -69,9 +70,7 @@ class HomePage extends StatelessWidget {
                 icon: Icons.auto_awesome_rounded,
                 onTap: () {
                   Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => const ARMeshyPage(),
-                    ),
+                    MaterialPageRoute(builder: (_) => const ARMeshyPage()),
                   );
                 },
               ),
@@ -82,9 +81,19 @@ class HomePage extends StatelessWidget {
                 icon: Icons.rocket_launch_rounded,
                 onTap: () {
                   Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => const ARRocketPage(),
-                    ),
+                    MaterialPageRoute(builder: (_) => const ARRocketPage()),
+                  );
+                },
+              ),
+              const SizedBox(height: 16),
+              _FeatureCard(
+                title: 'Saturn V Diagram',
+                subtitle:
+                    'Museum-style AR educational labels for each rocket section',
+                icon: Icons.schema_rounded,
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const ARDiagramPage()),
                   );
                 },
               ),
@@ -116,9 +125,7 @@ class _FeatureCard extends StatelessWidget {
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(20),
-        side: BorderSide(
-          color: Colors.white.withValues(alpha: 0.1),
-        ),
+        side: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
       ),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
@@ -130,7 +137,9 @@ class _FeatureCard extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.primary.withValues(alpha: 0.15),
                   shape: BoxShape.circle,
                 ),
                 child: Icon(
@@ -147,25 +156,22 @@ class _FeatureCard extends StatelessWidget {
                     Text(
                       title,
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w600,
-                          ),
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                     const SizedBox(height: 4),
                     Text(
                       subtitle,
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                            color: Colors.white70,
-                          ),
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodyMedium?.copyWith(color: Colors.white70),
                     ),
                   ],
                 ),
               ),
               const SizedBox(width: 12),
-              const Icon(
-                Icons.chevron_right_rounded,
-                color: Colors.white54,
-              ),
+              const Icon(Icons.chevron_right_rounded, color: Colors.white54),
             ],
           ),
         ),
