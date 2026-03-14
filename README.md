@@ -1,103 +1,141 @@
 # genai
 
-A Flutter AR demo with a repo-local Nix development shell and `direnv`
-support. The app opens directly into an AR scene where you can tap a horizontal
-surface to place one anchored dot for the current session.
+This repo contains two pieces:
+
+- `mobile/`: a Flutter AR app that asks Meshy for a text-to-3D model, downloads
+  the refined `glb`, and lets you place that model on a horizontal surface
+  inside an AR session
+- `server/`: a small Dart proxy that keeps the Meshy API key off the phone and
+  runs the full Meshy `preview` then `refine` workflow
+
+The repo root owns the Nix shell and `direnv` setup for both parts.
 
 ## Prerequisites
 
 - `nix`
 - `direnv`
-- `flutter` is provided by the flake shell
-- on Linux, the flake also provides the Android SDK and emulator packages
 - an AR-capable physical Android or iOS device
+- a Meshy API key exported as `MESHY_API_KEY`
 
-## Getting started
+On Linux, the flake also provides the Android SDK, NDK, platform tools, command
+line tools, and emulator packages.
 
-1. Allow the project environment:
+## Environment
 
-   ```bash
-   direnv allow
-   ```
-
-2. Fetch Dart and Flutter dependencies:
-
-   ```bash
-   flutter pub get
-   ```
-
-3. Confirm the toolchain:
-
-   ```bash
-   flutter doctor
-   ```
-
-4. Run the app on a physical AR-capable device:
-
-   ```bash
-   flutter run
-   ```
-
-5. Grant camera access when prompted. The AR session stays blocked until the
-   app has camera permission.
-
-You can also enter the shell manually with:
+Allow the repo shell once:
 
 ```bash
-nix develop
+cd /home/yvesd/Codebases/genai
+direnv allow
 ```
 
-## Notes
+The root `.envrc` will load the Nix dev shell and then source `.envrc.local` if
+it exists. A local secret file is ignored by Git.
 
-- The AR scene is powered by `ar_flutter_plugin_2` and a local GLTF dot asset.
-- Android development is the expected local path on Linux.
-- Android requires `minSdk 28` because the AR renderer uses `sceneview_android`.
-- Entering the shell rewrites `android/local.properties` to point Gradle at the
-  Nix-managed Android SDK, NDK, and CMake toolchains.
-- iOS project files are present, but building or running for iOS still requires
-  macOS and Xcode.
-- The AR scene supports one dot at a time. Use the in-app reset button to place
-  it again.
-- If you deny camera permission, the app stays in a blocked state until you
-  grant access or open system settings.
+Example:
 
-## AR usage
+```bash
+cp .envrc.local.example .envrc.local
+$EDITOR .envrc.local
+direnv allow
+```
 
-1. Move the device slowly until a horizontal surface is detected.
-2. Tap the surface to place the dot.
-3. Walk around it to confirm that it stays in place.
-4. Use the reset button to place it again somewhere else.
+## Start The Meshy Proxy
 
-## Android builds
+Install the backend dependencies:
+
+```bash
+cd /home/yvesd/Codebases/genai/server
+dart pub get
+```
+
+Start the proxy:
+
+```bash
+cd /home/yvesd/Codebases/genai/server
+dart run bin/server.dart
+```
+
+By default it listens on `http://0.0.0.0:8080`. You can override the port with
+`PORT`.
+
+The proxy exposes:
+
+- `POST /api/meshy/generate`
+- `GET /api/meshy/generate/:jobId`
+
+It keeps jobs in memory only.
+
+## Run The Flutter App
+
+Install the Flutter dependencies:
+
+```bash
+cd /home/yvesd/Codebases/genai/mobile
+flutter pub get
+```
+
+Run the app on a physical device, pointing it at the proxy on your computer:
+
+```bash
+cd /home/yvesd/Codebases/genai/mobile
+flutter run --dart-define=MESHY_PROXY_BASE_URL=http://<LAN-IP>:8080
+```
+
+Replace `<LAN-IP>` with the local network address of the machine running the
+proxy, for example `192.168.1.10`.
+
+## App Flow
+
+1. Grant camera access when prompted.
+2. Enter a text prompt in the bottom panel.
+3. Tap `Generate model`.
+4. Wait for the proxy to finish the Meshy preview and refine stages.
+5. Once the model is ready, move the phone until a horizontal plane is
+   detected.
+6. Tap once to place the generated model.
+7. Tap `Reset placement` to remove the current anchor and place the same model
+   again.
+8. Generate a new prompt to replace the current model.
+
+The app keeps one active generated model at a time and does not persist it
+across restarts.
+
+## Android Notes
+
+- The Nix shell rewrites `mobile/android/local.properties` so Gradle points at
+  the Nix-managed Android SDK, NDK, and CMake toolchains.
+- Android builds still require an ARCore-capable physical device for real AR
+  validation.
+- The emulator is useful only for launch and non-AR UI checks.
 
 Build a debug APK:
 
 ```bash
+cd /home/yvesd/Codebases/genai/mobile
 flutter build apk --debug
 ```
 
-Build a release APK:
+## Validation
+
+Backend:
 
 ```bash
-flutter build apk --release
+cd /home/yvesd/Codebases/genai/server
+dart test
 ```
 
-## Android emulator
-
-Create a local AVD from the SDK image bundled by the flake:
+Flutter app:
 
 ```bash
-avdmanager create avd -n pixel-api-36 -k "system-images;android-36;google_apis;x86_64"
+cd /home/yvesd/Codebases/genai/mobile
+flutter analyze
+flutter test
+flutter build apk --debug
 ```
 
-Start the emulator:
+## Security Note
 
-```bash
-emulator -avd pixel-api-36
-```
-
-Then verify Flutter can see it:
-
-```bash
-flutter devices
-```
+Do not commit `MESHY_API_KEY` into tracked files. The proxy is the only place
+that should read it. If you have already shared a real key in chat or elsewhere,
+rotate it before using this setup beyond local development.

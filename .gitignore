@@ -36,6 +36,7 @@ migrate_working_dir/
 .direnv/
 .envrc.local
 /android/local.properties
+/mobile/android/local.properties
 
 # Symbolication related
 app.*.symbols

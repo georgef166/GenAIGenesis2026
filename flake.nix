@@ -111,7 +111,7 @@ $candidate"
                     if [ -n "$cmake_root" ]; then
                       printf 'cmake.dir=%s\n' "$cmake_root"
                     fi
-                  } > android/local.properties
+                  } > mobile/android/local.properties
                 '';
               }
             else
