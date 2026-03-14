@@ -863,6 +863,12 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
         _promptController.text.trim().isNotEmpty;
 
     return Scaffold(
+      extendBodyBehindAppBar: true,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        iconTheme: const IconThemeData(color: Colors.white),
+      ),
       body: Stack(
         fit: StackFit.expand,
         children: [
