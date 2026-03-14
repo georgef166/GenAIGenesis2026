@@ -25,6 +25,7 @@ flutter:
 
   assets:
     - assets/models/dot.gltf
+    - assets/models/cloud.gltf
     - assets/models/flashcards/
     - assets/models/saturn_v_-_nasa/
     - assets/models/saturn_v_-_nasa/textures/

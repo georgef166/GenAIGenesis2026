@@ -22,6 +22,7 @@ import 'package:vector_math/vector_math_64.dart' hide Colors;
 // ---------------------------------------------------------------------------
 
 const _rocketModelAssetPath = 'assets/models/saturn_v_-_nasa/scene.gltf';
+const _cloudModelAssetPath = 'assets/models/cloud.gltf';
 
 /// The plugin's iOS side applies a 0.01 multiplier to every child node loaded
 /// from a GLTF asset.  Multiply the app-level scale by 100 on iOS to
@@ -196,6 +197,28 @@ enum _PlacementState {
 }
 
 // ---------------------------------------------------------------------------
+// Launch animation
+// ---------------------------------------------------------------------------
+
+enum _LaunchPhase {
+  idle,    // waiting to launch
+  lifting, // ascending (2–8 s)
+  gone,    // rocket above cloud layer
+}
+
+/// Total Y distance the rocket travels before it vanishes (metres).
+const _kLaunchAscendDistance = 2.0;
+
+/// Height at which the cloud layer appears (metres above anchor).
+const _kCloudLayerHeight = 1.4;
+
+/// Seconds before the rocket starts moving.
+const _kLaunchDelaySeconds = 2.0;
+
+/// Duration of the ascent phase in seconds.
+const _kLaunchDurationSeconds = 6.0;
+
+// ---------------------------------------------------------------------------
 // Main page widget
 // ---------------------------------------------------------------------------
 
@@ -227,9 +250,17 @@ class _ARDiagramPageState extends State<ARDiagramPage>
   int _planeCount = 0;
 
   Timer? _poseTimer;
+  Timer? _launchTimer;
   late final List<_DiagramLabel> _labels = _buildDiagramLabels();
   final List<ARNode> _flashcardNodes = <ARNode>[];
   final List<ARNode> _pointerLineNodes = <ARNode>[];
+
+  // Launch animation state
+  _LaunchPhase _launchPhase = _LaunchPhase.idle;
+  double _launchElapsed = 0.0; // seconds since launch sequence started
+  double _launchOffset = 0.0;  // current Y offset applied to rocket + cards (metres)
+  ARNode? _cloudNode;
+  bool _cloudVisible = false;
 
   // -------------------------------------------------------------------
   // Scale helpers
@@ -270,6 +301,7 @@ class _ARDiagramPageState extends State<ARDiagramPage>
   @override
   void dispose() {
     _poseTimer?.cancel();
+    _launchTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _sessionManager?.dispose();
     super.dispose();
@@ -499,7 +531,7 @@ class _ARDiagramPageState extends State<ARDiagramPage>
         _rocketAnchor = anchor;
         _rocketNode = node;
         _state = _PlacementState.placed;
-        _message = 'Saturn V placed! Walk around to explore the labels.';
+        _message = 'Saturn V placed! Launch begins in 2 seconds…';
       });
 
       final addedCards = await _addFlashcardsAndPointers(anchor);
@@ -518,6 +550,12 @@ class _ARDiagramPageState extends State<ARDiagramPage>
 
       // Start polling camera pose every ~33 ms (≈30 fps).
       _startPosePolling();
+
+      // Add cloud layer node (initially parked far below, will surface later).
+      await _addCloudLayer(anchor);
+
+      // Begin launch countdown.
+      _startLaunchSequence();
     } catch (e) {
       if (!mounted) return;
       _setOverlay(_PlacementState.error, 'Failed to place the rocket: $e');
@@ -530,6 +568,112 @@ class _ARDiagramPageState extends State<ARDiagramPage>
       const Duration(milliseconds: 33),
       (_) => _updateCameraPose(),
     );
+  }
+
+  // -------------------------------------------------------------------
+  // Launch animation
+  // -------------------------------------------------------------------
+
+  void _startLaunchSequence() {
+    _launchTimer?.cancel();
+    setState(() {
+      _launchPhase = _LaunchPhase.idle;
+      _launchElapsed = 0.0;
+      _launchOffset = 0.0;
+    });
+
+    const tickMs = 33; // ~30 fps
+    _launchTimer = Timer.periodic(
+      const Duration(milliseconds: tickMs),
+      (_) => _tickLaunch(tickMs / 1000.0),
+    );
+  }
+
+  void _tickLaunch(double dt) {
+    if (!mounted) return;
+    _launchElapsed += dt;
+
+    if (_launchPhase == _LaunchPhase.idle) {
+      // Show countdown message while waiting.
+      if (_launchElapsed >= _kLaunchDelaySeconds) {
+        setState(() {
+          _launchPhase = _LaunchPhase.lifting;
+          _message = '🚀 Saturn V is launching!';
+        });
+      }
+      return;
+    }
+
+    if (_launchPhase == _LaunchPhase.lifting) {
+      final t = ((_launchElapsed - _kLaunchDelaySeconds) / _kLaunchDurationSeconds)
+          .clamp(0.0, 1.0);
+
+      // Ease-in-out cubic for smooth acceleration.
+      final eased = _easeInOutCubic(t);
+      _launchOffset = eased * _kLaunchAscendDistance;
+
+      // Apply offset to rocket node.
+      final rn = _rocketNode;
+      if (rn != null) {
+        rn.position = Vector3(0.0, _launchOffset, 0.0);
+      }
+
+      // Apply offset to every flashcard and pointer line.
+      for (var i = 0; i < _flashcardNodes.length; i++) {
+        final label = _labels[i];
+        _flashcardNodes[i].position = label.labelOffset + Vector3(0.0, _launchOffset, 0.0);
+      }
+      for (var i = 0; i < _pointerLineNodes.length; i++) {
+        final label = _labels[i];
+        final lineCenter = label.labelOffset +
+            (label.pointerTarget - label.labelOffset) * 0.5 +
+            Vector3(0.0, _launchOffset, 0.0);
+        _pointerLineNodes[i].position = lineCenter;
+      }
+
+      // Show cloud when rocket reaches cloud layer height.
+      if (!_cloudVisible && _launchOffset >= _kCloudLayerHeight * 0.6) {
+        _showCloudLayer();
+      }
+
+      if (t >= 1.0) {
+        setState(() {
+          _launchPhase = _LaunchPhase.gone;
+          _message = '🌤 Saturn V has cleared the atmosphere!';
+        });
+        _launchTimer?.cancel();
+      }
+    }
+  }
+
+  static double _easeInOutCubic(double t) {
+    return t < 0.5 ? 4 * t * t * t : 1 - math.pow(-2 * t + 2, 3) / 2;
+  }
+
+  Future<void> _addCloudLayer(ARPlaneAnchor anchor) async {
+    final om = _objectManager;
+    if (om == null) return;
+
+    // Park the cloud far below initially.
+    final cloudNode = ARNode(
+      type: NodeType.localGLTF2,
+      uri: _cloudModelAssetPath,
+      scale: Vector3.all(1.5 * _iosModelCompensation),
+      position: Vector3(0.0, -10.0, 0.0), // hidden below floor until needed
+      rotation: Vector4(0.0, 1.0, 0.0, 0.0),
+    );
+
+    final added = await om.addNode(cloudNode, planeAnchor: anchor);
+    if (added ?? false) {
+      _cloudNode = cloudNode;
+    }
+  }
+
+  void _showCloudLayer() {
+    final cn = _cloudNode;
+    if (cn == null) return;
+    _cloudVisible = true;
+    cn.position = Vector3(0.0, _kCloudLayerHeight, 0.0);
   }
 
   Future<void> _updateCameraPose() async {
@@ -556,6 +700,7 @@ class _ARDiagramPageState extends State<ARDiagramPage>
 
   Future<void> _reset() async {
     _poseTimer?.cancel();
+    _launchTimer?.cancel();
     final om = _objectManager;
     final am = _anchorManager;
     final node = _rocketNode;
@@ -572,6 +717,9 @@ class _ARDiagramPageState extends State<ARDiagramPage>
       }
       _flashcardNodes.clear();
 
+      final cn = _cloudNode;
+      if (cn != null) om?.removeNode(cn);
+
       if (node != null) om?.removeNode(node);
       if (anchor != null) am?.removeAnchor(anchor);
     } catch (_) {}
@@ -580,6 +728,11 @@ class _ARDiagramPageState extends State<ARDiagramPage>
     setState(() {
       _rocketNode = null;
       _rocketAnchor = null;
+      _cloudNode = null;
+      _cloudVisible = false;
+      _launchPhase = _LaunchPhase.idle;
+      _launchElapsed = 0.0;
+      _launchOffset = 0.0;
       _state = _hasHorizontalPlane
           ? _PlacementState.readyToPlace
           : _PlacementState.scanning;
@@ -685,7 +838,9 @@ class _ARDiagramPageState extends State<ARDiagramPage>
     for (var index = 0; index < _flashcardNodes.length; index++) {
       final label = _labels[index];
       final cardNode = _flashcardNodes[index];
-      final toCamera = cameraLocal - label.labelOffset;
+      // Account for current launch offset when computing camera direction.
+      final cardPos = label.labelOffset + Vector3(0.0, _launchOffset, 0.0);
+      final toCamera = cameraLocal - cardPos;
       if (toCamera.length <= 0.0001) {
         continue;
       }
@@ -838,6 +993,7 @@ class _ARDiagramPageState extends State<ARDiagramPage>
                     planeCount: _planeCount,
                     isPlaneAvailable: _hasHorizontalPlane,
                     showReset: _rocketNode != null,
+                    launchPhase: _launchPhase,
                     primaryActionLabel: _primaryActionLabel,
                     onPrimaryAction: _primaryActionLabel == null
                         ? null
@@ -865,6 +1021,7 @@ class _StatusCard extends StatelessWidget {
     required this.planeCount,
     required this.isPlaneAvailable,
     required this.showReset,
+    required this.launchPhase,
     required this.primaryActionLabel,
     required this.onPrimaryAction,
     required this.onReset,
@@ -875,6 +1032,7 @@ class _StatusCard extends StatelessWidget {
   final int planeCount;
   final bool isPlaneAvailable;
   final bool showReset;
+  final _LaunchPhase launchPhase;
   final String? primaryActionLabel;
   final VoidCallback? onPrimaryAction;
   final VoidCallback onReset;
@@ -949,6 +1107,17 @@ class _StatusCard extends StatelessWidget {
                   ? Icons.check_circle_outline_rounded
                   : Icons.camera_alt_outlined,
             ),
+            if (launchPhase != _LaunchPhase.idle) ...[  
+              const SizedBox(height: 8),
+              _Chip(
+                label: launchPhase == _LaunchPhase.lifting
+                    ? '🚀 Launching…'
+                    : '🌤 Cleared the atmosphere',
+                icon: launchPhase == _LaunchPhase.lifting
+                    ? Icons.rocket_launch_rounded
+                    : Icons.cloud_rounded,
+              ),
+            ],
             if (primaryActionLabel != null) ...[
               const SizedBox(height: 14),
               FilledButton.icon(
