@@ -14,7 +14,11 @@ dependencies:
     path: plugins/ar_flutter_plugin_2
   audioplayers: ^6.1.0
   cupertino_icons: ^1.0.8
+<<<<<<< HEAD
   path_provider: ^2.1.5
+=======
+  http: ^1.2.2
+>>>>>>> harsheta_new
   permission_handler: ^11.3.1
   vector_math: ^2.2.0
 

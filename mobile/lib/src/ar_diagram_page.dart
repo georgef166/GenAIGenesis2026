@@ -854,6 +854,17 @@ class _ARDiagramPageState extends State<ARDiagramPage>
                 ),
               ),
             ),
+
+          if (_rocketNode != null)
+            SafeArea(
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+                  child: _FactRail(labels: _labels),
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -1003,6 +1014,138 @@ class _Chip extends StatelessWidget {
               style: Theme.of(
                 context,
               ).textTheme.labelMedium?.copyWith(color: Colors.white),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FactRail extends StatelessWidget {
+  const _FactRail({required this.labels});
+
+  final List<_DiagramLabel> labels;
+
+  @override
+  Widget build(BuildContext context) {
+    final maxRailWidth = MediaQuery.sizeOf(context).width * 0.46;
+    final maxRailHeight = MediaQuery.sizeOf(context).height * 0.72;
+
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: math.min(340, maxRailWidth)),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.35),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Rocket Fact Cards',
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 8),
+              ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: maxRailHeight),
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (var index = 0; index < labels.length; index++)
+                        _FactRailCard(
+                          factNumber: index + 1,
+                          title: labels[index].title,
+                          description: labels[index].description,
+                          color: labels[index].color,
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _FactRailCard extends StatelessWidget {
+  const _FactRailCard({
+    required this.factNumber,
+    required this.title,
+    required this.description,
+    required this.color,
+  });
+
+  final int factNumber;
+  final String title;
+  final String description;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.96),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 24,
+                  height: 24,
+                  alignment: Alignment.center,
+                  decoration: const BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Text(
+                    '$factNumber',
+                    style: const TextStyle(
+                      color: Colors.black,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: const TextStyle(
+                      color: Color(0xFF171717),
+                      fontWeight: FontWeight.w800,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              description,
+              style: const TextStyle(
+                color: Color(0xFF212121),
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                height: 1.28,
+              ),
             ),
           ],
         ),
