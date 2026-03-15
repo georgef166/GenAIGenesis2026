@@ -76,6 +76,7 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
   bool _isConfiguringSession = false;
   int _planeCount = 0;
   int _generationToken = 0;
+  bool _showPlacementUi = true;
 
   MeshyProxyClient? get _meshyClient => _proxyConfiguration.client;
 
@@ -251,8 +252,9 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
       case MeshyGenerationStage.error:
         return _generationErrorMessage ?? 'Meshy generation failed.';
       case MeshyGenerationStage.idle:
-        return 'Run the proxy on your computer and start Flutter with '
-            '--dart-define=MESHY_PROXY_BASE_URL=http://<LAN-IP>:8080.';
+        return 'Run the proxy on your computer at http://nixos:8080. '
+            'Use --dart-define=MESHY_PROXY_BASE_URL=http://<LAN-IP>:8080 '
+            'to override it.';
     }
   }
 
@@ -500,7 +502,9 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
         _modelNode = node;
         _sessionState = ARSessionState.placed;
         _sessionErrorMessage = null;
+        _showPlacementUi = false;
       });
+      _sessionManager?.showPlanes(false);
     } catch (error) {
       if (!mounted) {
         return;
@@ -658,7 +662,9 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
       _modelNode = null;
       _generatedModelUrl = null;
       _sessionErrorMessage = null;
+      _showPlacementUi = true;
     });
+    _sessionManager?.showPlanes(true);
   }
 
   Future<void> _resetPlacedModel() async {
@@ -671,7 +677,9 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
       _modelAnchor = null;
       _modelNode = null;
       _sessionErrorMessage = null;
+      _showPlacementUi = true;
     });
+    _sessionManager?.showPlanes(true);
     _syncReadyState();
   }
 
@@ -878,45 +886,47 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
               onARViewCreated: _onARViewCreated,
               planeDetectionConfig: PlaneDetectionConfig.horizontal,
             ),
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 220),
-              child: Align(
-                alignment: Alignment.topCenter,
-                child: ARStatusOverlay(
-                  title: _statusTitle,
-                  message: _statusMessage,
-                  icon: _statusIcon,
-                  planeChipLabel: _planeChipLabel,
-                  generationChipLabel: _generationChipLabel,
-                  placementChipLabel: _modelNode != null
-                      ? 'Model anchored'
-                      : 'Single model mode',
-                  planeCount: _planeCount,
-                  primaryActionLabel: _primaryActionLabel,
-                  onPrimaryAction: _primaryActionLabel == null
-                      ? null
-                      : _handlePrimaryAction,
-                  showReset: _modelNode != null,
-                  onReset: _resetPlacedModel,
+          if (_showPlacementUi)
+            SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 220),
+                child: Align(
+                  alignment: Alignment.topCenter,
+                  child: ARStatusOverlay(
+                    title: _statusTitle,
+                    message: _statusMessage,
+                    icon: _statusIcon,
+                    planeChipLabel: _planeChipLabel,
+                    generationChipLabel: _generationChipLabel,
+                    placementChipLabel: _modelNode != null
+                        ? 'Model anchored'
+                        : 'Single model mode',
+                    planeCount: _planeCount,
+                    primaryActionLabel: _primaryActionLabel,
+                    onPrimaryAction: _primaryActionLabel == null
+                        ? null
+                        : _handlePrimaryAction,
+                    showReset: _modelNode != null,
+                    onReset: _resetPlacedModel,
+                  ),
                 ),
               ),
             ),
-          ),
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Align(
-                alignment: Alignment.bottomCenter,
-                child: MeshyPromptPanel(
-                  promptController: _promptController,
-                  helperText: _promptHelperText,
-                  generateLabel: _generateButtonLabel,
-                  onGenerate: canGenerate ? _handleGeneratePressed : null,
+          if (_showPlacementUi)
+            SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Align(
+                  alignment: Alignment.bottomCenter,
+                  child: MeshyPromptPanel(
+                    promptController: _promptController,
+                    helperText: _promptHelperText,
+                    generateLabel: _generateButtonLabel,
+                    onGenerate: canGenerate ? _handleGeneratePressed : null,
+                  ),
                 ),
               ),
             ),
-          ),
         ],
       ),
     );

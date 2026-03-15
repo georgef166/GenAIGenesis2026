@@ -2,6 +2,34 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:genai/src/meshy_proxy_client.dart';
 
 void main() {
+  test('uses nixos proxy by default when no override is provided', () {
+    final configuration = MeshyProxyConfiguration.fromRawValue(null);
+
+    expect(configuration.error, isNull);
+    expect(configuration.client, isNotNull);
+    expect(configuration.client!.baseUri, Uri.parse('http://nixos:8080'));
+  });
+
+  test('uses the override URL when MESHY_PROXY_BASE_URL is provided', () {
+    final configuration = MeshyProxyConfiguration.fromRawValue(
+      'http://example.local:9000',
+    );
+
+    expect(configuration.error, isNull);
+    expect(configuration.client, isNotNull);
+    expect(
+      configuration.client!.baseUri,
+      Uri.parse('http://example.local:9000'),
+    );
+  });
+
+  test('returns an error for an invalid proxy override URL', () {
+    final configuration = MeshyProxyConfiguration.fromRawValue('not-a-url');
+
+    expect(configuration.client, isNull);
+    expect(configuration.error, contains('http://nixos:8080'));
+  });
+
   test('parses a completed Meshy generation job payload', () {
     final job = MeshyGenerationJob.fromJson(<String, dynamic>{
       'jobId': 'job-123',

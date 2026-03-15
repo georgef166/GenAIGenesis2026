@@ -19,6 +19,9 @@ PODS:
     - nanopb (~> 3.30910)
   - ARCoreNanoPbUpdated/TFShared (1.46.0.2):
     - ARCoreNanoPbUpdated/Base (~> 1.46.0.2)
+  - audioplayers_darwin (0.0.1):
+    - Flutter
+    - FlutterMacOS
   - BlueCryptor (1.0.32)
   - BlueECC (1.2.5)
   - BlueRSA (1.0.200)
@@ -92,6 +95,7 @@ PODS:
 
 DEPENDENCIES:
   - ar_flutter_plugin_2 (from `.symlinks/plugins/ar_flutter_plugin_2/ios`)
+  - audioplayers_darwin (from `.symlinks/plugins/audioplayers_darwin/darwin`)
   - Flutter (from `Flutter`)
   - geolocator_apple (from `.symlinks/plugins/geolocator_apple/darwin`)
   - permission_handler_apple (from `.symlinks/plugins/permission_handler_apple/ios`)
@@ -124,6 +128,8 @@ SPEC REPOS:
 EXTERNAL SOURCES:
   ar_flutter_plugin_2:
     :path: ".symlinks/plugins/ar_flutter_plugin_2/ios"
+  audioplayers_darwin:
+    :path: ".symlinks/plugins/audioplayers_darwin/darwin"
   Flutter:
     :path: Flutter
   geolocator_apple:
@@ -134,6 +140,7 @@ EXTERNAL SOURCES:
 SPEC CHECKSUMS:
   ar_flutter_plugin_2: 4897592337d4652aa1b3a69d10308754d4c00be9
   ARCoreNanoPbUpdated: 2fa532214834ff7073153227ee679a92075eed5c
+  audioplayers_darwin: 835ced6edd4c9fc8ebb0a7cc9e294a91d99917d5
   BlueCryptor: b0aee3d9b8f367b49b30de11cda90e1735571c24
   BlueECC: 0d18e93347d3ec6d41416de21c1ffa4d4cd3c2cc
   BlueRSA: dfeef51db96bcc4edec654956c1581adbda4e6a3

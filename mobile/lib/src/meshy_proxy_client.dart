@@ -9,14 +9,15 @@ class MeshyProxyConfiguration {
 
   static MeshyProxyConfiguration fromEnvironment() {
     const rawValue = String.fromEnvironment('MESHY_PROXY_BASE_URL');
-    final trimmed = rawValue.trim();
+    return fromRawValue(rawValue);
+  }
+
+  static MeshyProxyConfiguration fromRawValue(String? rawValue) {
+    final trimmed = rawValue?.trim() ?? '';
     if (trimmed.isEmpty) {
-      return const MeshyProxyConfiguration._(
-        client: null,
-        error:
-            'Set MESHY_PROXY_BASE_URL with --dart-define using the LAN address '
-            'of the local proxy, for example '
-            'http://192.168.1.10:8080.',
+      return MeshyProxyConfiguration._(
+        client: MeshyProxyClient(baseUri: Uri.parse('http://nixos:8080')),
+        error: null,
       );
     }
 
@@ -31,7 +32,7 @@ class MeshyProxyConfiguration {
         client: null,
         error:
             'MESHY_PROXY_BASE_URL must be an absolute http(s) URL such as '
-            'http://192.168.1.10:8080.',
+            'http://nixos:8080.',
       );
     }
 
@@ -49,6 +50,8 @@ class MeshyProxyClient {
 
   final Uri _baseUri;
   final HttpClient _httpClient;
+
+  Uri get baseUri => _baseUri;
 
   Future<MeshyGenerationJob> createJob(String prompt) async {
     final response = await _sendJsonRequest(

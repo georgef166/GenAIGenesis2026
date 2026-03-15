@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:io' show Platform;
+import 'dart:math' as math;
 
 import 'package:ar_flutter_plugin_2/ar_flutter_plugin.dart';
 import 'package:ar_flutter_plugin_2/datatypes/config_planedetection.dart';
@@ -11,6 +13,7 @@ import 'package:ar_flutter_plugin_2/managers/ar_session_manager.dart';
 import 'package:ar_flutter_plugin_2/models/ar_anchor.dart';
 import 'package:ar_flutter_plugin_2/models/ar_hittest_result.dart';
 import 'package:ar_flutter_plugin_2/models/ar_node.dart';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:genai/rocket_parts.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -20,6 +23,8 @@ import 'package:vector_math/vector_math_64.dart' hide Colors;
 // Asset path
 // ---------------------------------------------------------------------------
 const _rocketModelAssetPath = 'assets/models/saturn_v_-_nasa/scene.gltf';
+const _cloudModelAssetPath = 'assets/models/cloud.gltf';
+const _flameSpriteModelAssetPath = 'assets/models/flame_sprite.gltf';
 const _iosPluginModelScaleCompensation = 100.0;
 
 const _backgroundColor = Color(0xFF05070B);
@@ -41,6 +46,21 @@ enum ARPlacementState {
   unsupported,
   error,
 }
+
+// ---------------------------------------------------------------------------
+// Launch animation constants
+// ---------------------------------------------------------------------------
+
+enum LaunchPhase { idle, lifting, gone }
+
+const _kCloudLayerHeight = 1.4;
+const _kIdleBeforeCountdownSeconds = 1.0;
+const _kAscentInitialSpeedMps = 0.9;
+const _kAscentCruiseSpeedMps = 2.6;
+const _kAscentRampSeconds = 3.5;
+const _kPlumeHiddenY = -10.0;
+const _kEngineBaseY = -0.24;
+const _kEngineClusterRadius = 0.11;
 
 // ---------------------------------------------------------------------------
 // Main AR page
@@ -69,18 +89,60 @@ class _ARRocketPageState extends State<ARRocketPage>
   bool _hasInitializedSession = false;
   bool _isConfiguringSession = false;
   int _planeCount = 0;
+  bool _showPlacementUi = true;
+
+  // Launch animation state
+  Timer? _launchTimer;
+  LaunchPhase _launchPhase = LaunchPhase.idle;
+  double _launchElapsed = 0.0;
+  double _liftoffElapsed = 0.0;
+  double _launchOffset = 0.0;
+  bool _countdownPlayed = false;
+  bool _countdownCompleted = false;
+  bool _liftoffTriggered = false;
+  bool _engineStarted = false;
+  ARNode? _cloudNode;
+  bool _cloudVisible = false;
+  final List<ARNode> _flameNodes = <ARNode>[];
+  bool _flamesVisible = false;
+
+  final List<Vector3> _engineOffsets = <Vector3>[
+    Vector3(0.0, 0.0, 0.0),
+    Vector3(_kEngineClusterRadius, 0.0, _kEngineClusterRadius),
+    Vector3(-_kEngineClusterRadius, 0.0, _kEngineClusterRadius),
+    Vector3(_kEngineClusterRadius, 0.0, -_kEngineClusterRadius),
+    Vector3(-_kEngineClusterRadius, 0.0, -_kEngineClusterRadius),
+  ];
+
+  final AudioPlayer _countdownPlayer = AudioPlayer();
+  final AudioPlayer _enginePlayer = AudioPlayer();
+  StreamSubscription<void>? _countdownCompleteSub;
+  StreamSubscription<PlayerState>? _engineStateSub;
+  bool _engineAudioRunning = false;
+  static const _engineBaseVolume = 0.88;
 
   Vector3 get _rocketScale =>
       Platform.isIOS
-          ? Vector3(0.2 * _iosPluginModelScaleCompensation,
-              0.2 * _iosPluginModelScaleCompensation,
-              0.2 * _iosPluginModelScaleCompensation)
-          : Vector3(0.2, 0.2, 0.2);
+          ? Vector3(0.1 * _iosPluginModelScaleCompensation,
+              0.1 * _iosPluginModelScaleCompensation,
+              0.1 * _iosPluginModelScaleCompensation)
+          : Vector3(0.1, 0.1, 0.1);
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _enginePlayer.setReleaseMode(ReleaseMode.loop);
+    _enginePlayer.setVolume(_engineBaseVolume);
+    _engineStateSub = _enginePlayer.onPlayerStateChanged.listen((state) {
+      if (state == PlayerState.stopped || state == PlayerState.disposed) {
+        _engineAudioRunning = false;
+      }
+    });
+    _countdownCompleteSub = _countdownPlayer.onPlayerComplete.listen((_) {
+      _countdownCompleted = true;
+      _triggerLiftoffIfReady();
+    });
     _ensureCameraPermission();
   }
 
@@ -333,9 +395,18 @@ class _ARRocketPageState extends State<ARRocketPage>
         _rocketAnchor = anchor;
         _rocketNode = node;
         _state = ARPlacementState.placed;
+        _showPlacementUi = false;
         _message =
-            'Rocket placed! Tap it or press "Explore parts" to learn about each section.';
+        'Rocket placed! Launch begins in 1 second…';
       });
+      _sessionManager?.showPlanes(false);
+
+      // Add cloud layer (parked off-scene until needed).
+      await _addCloudLayer(anchor);
+      // Add multi-engine flame sprites (parked off-scene until liftoff).
+      await _addEngineFlameNodes(anchor);
+      // Begin launch countdown.
+      _startLaunchSequence();
     } catch (error) {
       if (!mounted) return;
       _setOverlayState(
@@ -407,6 +478,7 @@ class _ARRocketPageState extends State<ARRocketPage>
   }
 
   Future<void> _resetRocket() async {
+    _launchTimer?.cancel();
     final objectManager = _objectManager;
     final anchorManager = _anchorManager;
     final rocketNode = _rocketNode;
@@ -415,16 +487,40 @@ class _ARRocketPageState extends State<ARRocketPage>
 
     try {
       if (rocketNode != null) objectManager?.removeNode(rocketNode);
+      final cn = _cloudNode;
+      if (cn != null) objectManager?.removeNode(cn);
+      for (final flame in _flameNodes) {
+        objectManager?.removeNode(flame);
+      }
+      _flameNodes.clear();
       if (rocketAnchor != null) anchorManager?.removeAnchor(rocketAnchor);
     } catch (_) {
       // Ignore cleanup errors and return the UI to placement mode anyway.
     }
+
+    await _countdownPlayer.stop();
+    await _enginePlayer.stop();
+    _engineAudioRunning = false;
+    await _enginePlayer.setVolume(_engineBaseVolume);
 
     if (!mounted) return;
 
     setState(() {
       _rocketNode = null;
       _rocketAnchor = null;
+      _cloudNode = null;
+      _showPlacementUi = true;
+      _cloudVisible = false;
+      _flamesVisible = false;
+      _launchPhase = LaunchPhase.idle;
+      _launchElapsed = 0.0;
+      _liftoffElapsed = 0.0;
+      _launchOffset = 0.0;
+      _countdownPlayed = false;
+      _countdownCompleted = false;
+      _liftoffTriggered = false;
+      _engineStarted = false;
+      _engineAudioRunning = false;
       if (_hasHorizontalPlane) {
         _state = ARPlacementState.readyToPlace;
         _message = 'Tap a horizontal surface to place the rocket.';
@@ -433,6 +529,181 @@ class _ARRocketPageState extends State<ARRocketPage>
         _message = 'Move your phone slowly to detect a flat surface.';
       }
     });
+    _sessionManager?.showPlanes(true);
+  }
+
+  // -------------------------------------------------------------------------
+  // Launch animation
+  // -------------------------------------------------------------------------
+
+  void _startLaunchSequence() {
+    _launchTimer?.cancel();
+    setState(() {
+      _launchPhase = LaunchPhase.idle;
+      _launchElapsed = 0.0;
+      _liftoffElapsed = 0.0;
+      _launchOffset = 0.0;
+      _countdownPlayed = false;
+      _countdownCompleted = false;
+      _liftoffTriggered = false;
+      _engineStarted = false;
+      _engineAudioRunning = false;
+      _message = 'Rocket placed! Countdown starts in 1 second…';
+    });
+    const tickMs = 33;
+    _launchTimer = Timer.periodic(
+      const Duration(milliseconds: tickMs),
+      (_) => _tickLaunch(tickMs / 1000.0),
+    );
+  }
+
+  void _tickLaunch(double dt) {
+    if (!mounted) return;
+    _launchElapsed += dt;
+
+    if (!_countdownPlayed && _launchElapsed >= _kIdleBeforeCountdownSeconds) {
+      _countdownPlayed = true;
+      setState(() {
+        _message = '🔊 3... 2... 1...';
+      });
+      unawaited(_playCountdownAudio());
+    }
+
+    if (_launchPhase == LaunchPhase.idle) {
+      _triggerLiftoffIfReady();
+      return;
+    }
+
+    if (_launchPhase == LaunchPhase.lifting) {
+      final liftElapsed = _launchElapsed - _liftoffElapsed;
+      final rampT = (liftElapsed / _kAscentRampSeconds).clamp(0.0, 1.0);
+      final speed = _kAscentInitialSpeedMps +
+          (_kAscentCruiseSpeedMps - _kAscentInitialSpeedMps) * rampT;
+      _launchOffset += speed * dt;
+
+      final rn = _rocketNode;
+      if (rn != null) {
+        rn.position = Vector3(0.0, _launchOffset, 0.0);
+      }
+      if (_flamesVisible) {
+        _updateFlameTransforms(_launchOffset);
+      }
+
+      if (!_cloudVisible && _launchOffset >= _kCloudLayerHeight * 0.6) {
+        _showCloudLayer();
+      }
+    }
+  }
+
+  void _triggerLiftoffIfReady() {
+    if (!mounted || _liftoffTriggered) return;
+    if (!_countdownPlayed || !_countdownCompleted) return;
+
+    _liftoffTriggered = true;
+    _liftoffElapsed = _launchElapsed;
+
+    setState(() {
+      _launchPhase = LaunchPhase.lifting;
+      _message = '🚀 Liftoff! Saturn V is launching!';
+    });
+
+    if (!_engineStarted) {
+      _engineStarted = true;
+      _showFlames();
+      unawaited(_startEngineAudio());
+    }
+  }
+
+  Future<void> _addCloudLayer(ARPlaneAnchor anchor) async {
+    final om = _objectManager;
+    if (om == null) return;
+    final cloudNode = ARNode(
+      type: NodeType.localGLTF2,
+      uri: _cloudModelAssetPath,
+      scale: Vector3.all(1.5 * _iosPluginModelScaleCompensation),
+      position: Vector3(0.0, -10.0, 0.0),
+      rotation: Vector4(0.0, 1.0, 0.0, 0.0),
+    );
+    final added = await om.addNode(cloudNode, planeAnchor: anchor);
+    if (added ?? false) {
+      _cloudNode = cloudNode;
+    }
+  }
+
+  Future<void> _addEngineFlameNodes(ARPlaneAnchor anchor) async {
+    final om = _objectManager;
+    if (om == null) return;
+
+    _flameNodes.clear();
+
+    for (final offset in _engineOffsets) {
+      final node = ARNode(
+        type: NodeType.localGLTF2,
+        uri: _flameSpriteModelAssetPath,
+        scale: _flameScale,
+        position: Vector3(offset.x, _kPlumeHiddenY, offset.z),
+        rotation: Vector4(1.0, 0.0, 0.0, math.pi / 2),
+      );
+
+      final didAdd = await om.addNode(node, planeAnchor: anchor);
+      if (didAdd ?? false) {
+        _flameNodes.add(node);
+      }
+    }
+  }
+
+  Vector3 get _flameScale {
+    final c = _iosPluginModelScaleCompensation;
+    return Vector3(0.36 * c, 1.20 * c, 0.36 * c);
+  }
+
+  Vector3 _flameLocalPosition(Vector3 engineOffset, double rocketOffsetY) {
+    return Vector3(
+      engineOffset.x,
+      _kEngineBaseY + rocketOffsetY,
+      engineOffset.z,
+    );
+  }
+
+  void _updateFlameTransforms(double rocketOffsetY) {
+    final count = math.min(_flameNodes.length, _engineOffsets.length);
+    for (var i = 0; i < count; i++) {
+      _flameNodes[i].position = _flameLocalPosition(_engineOffsets[i], rocketOffsetY);
+    }
+  }
+
+  void _showFlames() {
+    _flamesVisible = true;
+    _updateFlameTransforms(_launchOffset);
+  }
+
+  Future<void> _playCountdownAudio() async {
+    await _countdownPlayer.stop();
+    _countdownCompleted = false;
+    await _countdownPlayer.play(
+      AssetSource('audio/countdown_liftoff.aiff'),
+      volume: 1.0,
+    );
+  }
+
+  Future<void> _startEngineAudio() async {
+    if (_engineAudioRunning) {
+      return;
+    }
+    _engineAudioRunning = true;
+    await _enginePlayer.setReleaseMode(ReleaseMode.loop);
+    await _enginePlayer.setVolume(_engineBaseVolume);
+    await _enginePlayer.play(
+      AssetSource('audio/rocket_engine_loop.wav'),
+      volume: _engineBaseVolume,
+    );
+  }
+
+  void _showCloudLayer() {
+    final cn = _cloudNode;
+    if (cn == null) return;
+    _cloudVisible = true;
+    cn.position = Vector3(0.0, _kCloudLayerHeight, 0.0);
   }
 
   Future<void> _handlePrimaryAction() async {
@@ -466,6 +737,11 @@ class _ARRocketPageState extends State<ARRocketPage>
 
   @override
   void dispose() {
+    _launchTimer?.cancel();
+    _countdownCompleteSub?.cancel();
+    _engineStateSub?.cancel();
+    unawaited(_countdownPlayer.dispose());
+    unawaited(_enginePlayer.dispose());
     WidgetsBinding.instance.removeObserver(this);
     _sessionManager?.dispose();
     super.dispose();
@@ -493,37 +769,39 @@ class _ARRocketPageState extends State<ARRocketPage>
               onARViewCreated: _onARViewCreated,
               planeDetectionConfig: PlaneDetectionConfig.horizontal,
             ),
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  // Status / instruction overlay
-                  ARStatusOverlay(
-                    state: _state,
-                    message: _message,
-                    isHorizontalPlaneAvailable: _hasHorizontalPlane,
-                    primaryActionLabel: _primaryActionLabel,
-                    onPrimaryAction: _primaryActionLabel == null
-                        ? null
-                        : _handlePrimaryAction,
-                    showReset: _rocketNode != null,
-                    onReset: _resetRocket,
-                    planeCount: _planeCount,
-                  ),
-
-                  const Spacer(),
-
-                  // "Explore parts" button — visible only after placement.
-                  if (_state == ARPlacementState.placed)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: _ExplorePartsButton(onTap: _showPartsSheet),
+          if (_showPlacementUi)
+            SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    // Status / instruction overlay
+                    ARStatusOverlay(
+                      state: _state,
+                      message: _message,
+                      isHorizontalPlaneAvailable: _hasHorizontalPlane,
+                      primaryActionLabel: _primaryActionLabel,
+                      onPrimaryAction: _primaryActionLabel == null
+                          ? null
+                          : _handlePrimaryAction,
+                      showReset: _rocketNode != null,
+                      onReset: _resetRocket,
+                      planeCount: _planeCount,
+                      launchPhase: _launchPhase,
                     ),
-                ],
+
+                    const Spacer(),
+
+                    // "Explore parts" button — visible only after placement.
+                    if (_state == ARPlacementState.placed)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: _ExplorePartsButton(onTap: _showPartsSheet),
+                      ),
+                  ],
+                ),
               ),
             ),
-          ),
         ],
       ),
     );
@@ -645,7 +923,7 @@ class RocketPartsSheet extends StatelessWidget {
                     horizontal: 16,
                   ),
                   itemCount: parts.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 8),
+                  separatorBuilder: (_, s) => const SizedBox(height: 8),
                   itemBuilder: (_, index) {
                     final part = parts[index];
                     return _PartListTile(
@@ -850,6 +1128,7 @@ class ARStatusOverlay extends StatelessWidget {
     required this.showReset,
     required this.onReset,
     required this.planeCount,
+    this.launchPhase = LaunchPhase.idle,
   });
 
   final ARPlacementState state;
@@ -860,6 +1139,7 @@ class ARStatusOverlay extends StatelessWidget {
   final bool showReset;
   final VoidCallback onReset;
   final int planeCount;
+  final LaunchPhase launchPhase;
 
   @override
   Widget build(BuildContext context) {
@@ -928,6 +1208,15 @@ class ARStatusOverlay extends StatelessWidget {
                       : '$planeCount plane${planeCount == 1 ? '' : 's'} tracked',
                   icon: Icons.layers_outlined,
                 ),
+                if (launchPhase != LaunchPhase.idle)
+                  _OverlayChip(
+                    label: launchPhase == LaunchPhase.lifting
+                        ? '🚀 Launching…'
+                        : '🌤 Cleared atmosphere',
+                    icon: launchPhase == LaunchPhase.lifting
+                        ? Icons.rocket_launch_rounded
+                        : Icons.cloud_rounded,
+                  ),
               ],
             ),
             if (primaryActionLabel != null) ...[

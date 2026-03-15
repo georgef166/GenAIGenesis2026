@@ -225,6 +225,7 @@ class _ARDiagramPageState extends State<ARDiagramPage>
   bool _hasInitializedSession = false;
   bool _isConfiguringSession = false;
   int _planeCount = 0;
+  bool _showPlacementUi = true;
 
   Timer? _poseTimer;
   late final List<_DiagramLabel> _labels = _buildDiagramLabels();
@@ -236,7 +237,7 @@ class _ARDiagramPageState extends State<ARDiagramPage>
   // -------------------------------------------------------------------
 
   double get _rocketScaleBase {
-    return 0.024;
+    return 0.012;
   }
 
   double get _iosModelCompensation =>
@@ -499,8 +500,10 @@ class _ARDiagramPageState extends State<ARDiagramPage>
         _rocketAnchor = anchor;
         _rocketNode = node;
         _state = _PlacementState.placed;
+        _showPlacementUi = false;
         _message = 'Saturn V placed! Walk around to explore the labels.';
       });
+      _sessionManager?.showPlanes(false);
 
       final addedCards = await _addFlashcardsAndPointers(anchor);
       if (!mounted) return;
@@ -580,6 +583,7 @@ class _ARDiagramPageState extends State<ARDiagramPage>
     setState(() {
       _rocketNode = null;
       _rocketAnchor = null;
+      _showPlacementUi = true;
       _state = _hasHorizontalPlane
           ? _PlacementState.readyToPlace
           : _PlacementState.scanning;
@@ -587,6 +591,7 @@ class _ARDiagramPageState extends State<ARDiagramPage>
           ? 'Tap a surface to place the Saturn V diagram.'
           : 'Move your phone slowly to detect a flat surface.';
     });
+    _sessionManager?.showPlanes(true);
   }
 
   Future<bool> _addFlashcardsAndPointers(ARPlaneAnchor anchor) async {
@@ -827,27 +832,28 @@ class _ARDiagramPageState extends State<ARDiagramPage>
             ),
 
           // HUD
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  _StatusCard(
-                    state: _state,
-                    message: _message,
-                    planeCount: _planeCount,
-                    isPlaneAvailable: _hasHorizontalPlane,
-                    showReset: _rocketNode != null,
-                    primaryActionLabel: _primaryActionLabel,
-                    onPrimaryAction: _primaryActionLabel == null
-                        ? null
-                        : _handlePrimaryAction,
-                    onReset: _reset,
-                  ),
-                ],
+          if (_showPlacementUi)
+            SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    _StatusCard(
+                      state: _state,
+                      message: _message,
+                      planeCount: _planeCount,
+                      isPlaneAvailable: _hasHorizontalPlane,
+                      showReset: _rocketNode != null,
+                      primaryActionLabel: _primaryActionLabel,
+                      onPrimaryAction: _primaryActionLabel == null
+                          ? null
+                          : _handlePrimaryAction,
+                      onReset: _reset,
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
         ],
       ),
     );
