@@ -24,7 +24,9 @@ import 'package:vector_math/vector_math_64.dart' hide Colors;
 // ---------------------------------------------------------------------------
 const _rocketModelAssetPath = 'assets/models/saturn_v_-_nasa/scene.gltf';
 const _cloudModelAssetPath = 'assets/models/cloud.gltf';
-const _flameModelAssetPath = 'assets/models/flame_cone.gltf';
+const _flameOuterModelAssetPath = 'assets/models/flame_cone.gltf';
+const _flameInnerModelAssetPath = 'assets/models/flame_inner.gltf';
+const _smokePlumeModelAssetPath = 'assets/models/smoke_plume.gltf';
 const _iosPluginModelScaleCompensation = 100.0;
 
 const _backgroundColor = Color(0xFF05070B);
@@ -53,6 +55,20 @@ enum ARPlacementState {
 
 enum LaunchPhase { idle, lifting, gone }
 
+enum _PlumeLayer { inner, outer, smoke }
+
+class _PlumeNodeRef {
+  _PlumeNodeRef({
+    required this.node,
+    required this.engineOffset,
+    required this.layer,
+  });
+
+  final ARNode node;
+  final Vector3 engineOffset;
+  final _PlumeLayer layer;
+}
+
 const _kLaunchAscendDistance = 2.0;
 const _kCloudLayerHeight = 1.4;
 const _kIdleBeforeCountdownSeconds = 1.0;
@@ -60,6 +76,9 @@ const _kCountdownSeconds = 3.0;
 const _kLiftoffAtSeconds =
   _kIdleBeforeCountdownSeconds + _kCountdownSeconds;
 const _kLaunchDurationSeconds = 6.0;
+const _kPlumeHiddenY = -10.0;
+const _kEngineBaseY = -0.16;
+const _kEngineClusterRadius = 0.055;
 
 // ---------------------------------------------------------------------------
 // Main AR page
@@ -98,8 +117,16 @@ class _ARRocketPageState extends State<ARRocketPage>
   bool _engineStarted = false;
   ARNode? _cloudNode;
   bool _cloudVisible = false;
-  ARNode? _flameNode;
-  bool _flameVisible = false;
+  final List<_PlumeNodeRef> _plumeNodes = <_PlumeNodeRef>[];
+  bool _plumesVisible = false;
+
+  final List<Vector3> _engineOffsets = <Vector3>[
+    Vector3(0.0, 0.0, 0.0),
+    Vector3(_kEngineClusterRadius, 0.0, _kEngineClusterRadius),
+    Vector3(-_kEngineClusterRadius, 0.0, _kEngineClusterRadius),
+    Vector3(_kEngineClusterRadius, 0.0, -_kEngineClusterRadius),
+    Vector3(-_kEngineClusterRadius, 0.0, -_kEngineClusterRadius),
+  ];
 
   final AudioPlayer _countdownPlayer = AudioPlayer();
   final AudioPlayer _enginePlayer = AudioPlayer();
@@ -376,8 +403,8 @@ class _ARRocketPageState extends State<ARRocketPage>
 
       // Add cloud layer (parked off-scene until needed).
       await _addCloudLayer(anchor);
-      // Add flame node (parked off-scene until liftoff).
-      await _addFlameNode(anchor);
+      // Add multi-engine plume nodes (parked off-scene until liftoff).
+      await _addEnginePlumeNodes(anchor);
       // Begin launch countdown.
       _startLaunchSequence();
     } catch (error) {
@@ -462,8 +489,10 @@ class _ARRocketPageState extends State<ARRocketPage>
       if (rocketNode != null) objectManager?.removeNode(rocketNode);
       final cn = _cloudNode;
       if (cn != null) objectManager?.removeNode(cn);
-      final fn = _flameNode;
-      if (fn != null) objectManager?.removeNode(fn);
+      for (final plume in _plumeNodes) {
+        objectManager?.removeNode(plume.node);
+      }
+      _plumeNodes.clear();
       if (rocketAnchor != null) anchorManager?.removeAnchor(rocketAnchor);
     } catch (_) {
       // Ignore cleanup errors and return the UI to placement mode anyway.
@@ -480,8 +509,7 @@ class _ARRocketPageState extends State<ARRocketPage>
       _rocketAnchor = null;
       _cloudNode = null;
       _cloudVisible = false;
-      _flameNode = null;
-      _flameVisible = false;
+      _plumesVisible = false;
       _launchPhase = LaunchPhase.idle;
       _launchElapsed = 0.0;
       _launchOffset = 0.0;
@@ -538,7 +566,7 @@ class _ARRocketPageState extends State<ARRocketPage>
         });
         if (!_engineStarted) {
           _engineStarted = true;
-          _showFlame();
+          _showPlumes();
           unawaited(_startEngineAudio());
         }
       }
@@ -556,11 +584,8 @@ class _ARRocketPageState extends State<ARRocketPage>
       if (rn != null) {
         rn.position = Vector3(0.0, _launchOffset, 0.0);
       }
-      if (_flameVisible) {
-        final fn = _flameNode;
-        if (fn != null) {
-          fn.position = _flameLocalPosition(_launchOffset);
-        }
+      if (_plumesVisible) {
+        _updatePlumeTransforms(_launchOffset, animate: true);
       }
 
       if (!_cloudVisible && _launchOffset >= _kCloudLayerHeight * 0.6) {
@@ -572,7 +597,7 @@ class _ARRocketPageState extends State<ARRocketPage>
           _launchPhase = LaunchPhase.gone;
           _message = '🌤 Saturn V has cleared the atmosphere!';
         });
-        _hideFlame();
+        _hidePlumes();
         unawaited(_fadeOutAndStopEngineAudio());
         _launchTimer?.cancel();
       }
@@ -601,44 +626,118 @@ class _ARRocketPageState extends State<ARRocketPage>
     }
   }
 
-  Future<void> _addFlameNode(ARPlaneAnchor anchor) async {
+  Future<void> _addEnginePlumeNodes(ARPlaneAnchor anchor) async {
     final om = _objectManager;
     if (om == null) return;
 
-    final flameNode = ARNode(
-      type: NodeType.localGLTF2,
-      uri: _flameModelAssetPath,
-      scale: Vector3(
-        0.09 * _iosPluginModelScaleCompensation,
-        0.18 * _iosPluginModelScaleCompensation,
-        0.09 * _iosPluginModelScaleCompensation,
-      ),
-      position: Vector3(0.0, -10.0, 0.0),
-      rotation: Vector4(0.0, 1.0, 0.0, 0.0),
-    );
+    _plumeNodes.clear();
 
-    final didAdd = await om.addNode(flameNode, planeAnchor: anchor);
-    if (didAdd ?? false) {
-      _flameNode = flameNode;
+    for (final offset in _engineOffsets) {
+      final layers = <_PlumeLayer, String>{
+        _PlumeLayer.outer: _flameOuterModelAssetPath,
+        _PlumeLayer.inner: _flameInnerModelAssetPath,
+        _PlumeLayer.smoke: _smokePlumeModelAssetPath,
+      };
+
+      for (final layerEntry in layers.entries) {
+        final node = ARNode(
+          type: NodeType.localGLTF2,
+          uri: layerEntry.value,
+          scale: _basePlumeScale(layerEntry.key),
+          position: Vector3(offset.x, _kPlumeHiddenY, offset.z),
+          rotation: Vector4(1.0, 0.0, 0.0, math.pi),
+        );
+
+        final didAdd = await om.addNode(node, planeAnchor: anchor);
+        if (didAdd ?? false) {
+          _plumeNodes.add(
+            _PlumeNodeRef(
+              node: node,
+              engineOffset: offset,
+              layer: layerEntry.key,
+            ),
+          );
+        }
+      }
     }
   }
 
-  Vector3 _flameLocalPosition(double rocketOffsetY) {
-    return Vector3(0.0, -0.16 + rocketOffsetY, 0.0);
+  Vector3 _plumeLocalPosition(
+    Vector3 engineOffset,
+    double rocketOffsetY,
+    _PlumeLayer layer,
+  ) {
+    final smokeDrop = layer == _PlumeLayer.smoke ? -0.07 : 0.0;
+    return Vector3(
+      engineOffset.x,
+      _kEngineBaseY + rocketOffsetY + smokeDrop,
+      engineOffset.z,
+    );
   }
 
-  void _showFlame() {
-    final fn = _flameNode;
-    if (fn == null) return;
-    _flameVisible = true;
-    fn.position = _flameLocalPosition(_launchOffset);
+  Vector3 _basePlumeScale(_PlumeLayer layer) {
+    switch (layer) {
+      case _PlumeLayer.inner:
+        return Vector3(
+          0.10 * _iosPluginModelScaleCompensation,
+          0.34 * _iosPluginModelScaleCompensation,
+          0.10 * _iosPluginModelScaleCompensation,
+        );
+      case _PlumeLayer.outer:
+        return Vector3(
+          0.17 * _iosPluginModelScaleCompensation,
+          0.46 * _iosPluginModelScaleCompensation,
+          0.17 * _iosPluginModelScaleCompensation,
+        );
+      case _PlumeLayer.smoke:
+        return Vector3(
+          0.24 * _iosPluginModelScaleCompensation,
+          0.62 * _iosPluginModelScaleCompensation,
+          0.24 * _iosPluginModelScaleCompensation,
+        );
+    }
   }
 
-  void _hideFlame() {
-    final fn = _flameNode;
-    if (fn == null) return;
-    _flameVisible = false;
-    fn.position = Vector3(0.0, -10.0, 0.0);
+  void _updatePlumeTransforms(double rocketOffsetY, {required bool animate}) {
+    for (final plume in _plumeNodes) {
+      final phase = plume.engineOffset.x * 15.0 + plume.engineOffset.z * 9.0;
+      final pulse = animate
+          ? (0.92 + 0.18 * (0.5 + 0.5 * math.sin(_launchElapsed * 28.0 + phase)))
+          : 1.0;
+      final baseScale = _basePlumeScale(plume.layer);
+      final scaleMultiplier = switch (plume.layer) {
+        _PlumeLayer.inner => pulse,
+        _PlumeLayer.outer => 0.95 + (pulse - 1.0) * 0.7,
+        _PlumeLayer.smoke => 0.98 + (pulse - 1.0) * 0.4,
+      };
+
+      plume.node.scale = Vector3(
+        baseScale.x * scaleMultiplier,
+        baseScale.y * scaleMultiplier,
+        baseScale.z * scaleMultiplier,
+      );
+      plume.node.position = _plumeLocalPosition(
+        plume.engineOffset,
+        rocketOffsetY,
+        plume.layer,
+      );
+    }
+  }
+
+  void _showPlumes() {
+    _plumesVisible = true;
+    _updatePlumeTransforms(_launchOffset, animate: false);
+  }
+
+  void _hidePlumes() {
+    _plumesVisible = false;
+    for (final plume in _plumeNodes) {
+      plume.node.position = Vector3(
+        plume.engineOffset.x,
+        _kPlumeHiddenY,
+        plume.engineOffset.z,
+      );
+    }
   }
 
   Future<void> _playCountdownAudio() async {
