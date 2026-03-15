@@ -116,6 +116,8 @@ class _ARRocketPageState extends State<ARRocketPage>
   final AudioPlayer _countdownPlayer = AudioPlayer();
   final AudioPlayer _enginePlayer = AudioPlayer();
   StreamSubscription<void>? _countdownCompleteSub;
+  StreamSubscription<PlayerState>? _engineStateSub;
+  bool _engineAudioRunning = false;
   static const _engineBaseVolume = 0.88;
 
   Vector3 get _rocketScale =>
@@ -131,6 +133,11 @@ class _ARRocketPageState extends State<ARRocketPage>
     WidgetsBinding.instance.addObserver(this);
     _enginePlayer.setReleaseMode(ReleaseMode.loop);
     _enginePlayer.setVolume(_engineBaseVolume);
+    _engineStateSub = _enginePlayer.onPlayerStateChanged.listen((state) {
+      if (state == PlayerState.stopped || state == PlayerState.disposed) {
+        _engineAudioRunning = false;
+      }
+    });
     _countdownCompleteSub = _countdownPlayer.onPlayerComplete.listen((_) {
       _countdownCompleted = true;
       _triggerLiftoffIfReady();
@@ -490,6 +497,7 @@ class _ARRocketPageState extends State<ARRocketPage>
 
     await _countdownPlayer.stop();
     await _enginePlayer.stop();
+    _engineAudioRunning = false;
     await _enginePlayer.setVolume(_engineBaseVolume);
 
     if (!mounted) return;
@@ -508,6 +516,7 @@ class _ARRocketPageState extends State<ARRocketPage>
       _countdownCompleted = false;
       _liftoffTriggered = false;
       _engineStarted = false;
+      _engineAudioRunning = false;
       if (_hasHorizontalPlane) {
         _state = ARPlacementState.readyToPlace;
         _message = 'Tap a horizontal surface to place the rocket.';
@@ -533,6 +542,7 @@ class _ARRocketPageState extends State<ARRocketPage>
       _countdownCompleted = false;
       _liftoffTriggered = false;
       _engineStarted = false;
+      _engineAudioRunning = false;
       _message = 'Rocket placed! Countdown starts in 1 second…';
     });
     const tickMs = 33;
@@ -672,7 +682,10 @@ class _ARRocketPageState extends State<ARRocketPage>
   }
 
   Future<void> _startEngineAudio() async {
-    await _enginePlayer.stop();
+    if (_engineAudioRunning) {
+      return;
+    }
+    _engineAudioRunning = true;
     await _enginePlayer.setReleaseMode(ReleaseMode.loop);
     await _enginePlayer.setVolume(_engineBaseVolume);
     await _enginePlayer.play(
@@ -721,6 +734,7 @@ class _ARRocketPageState extends State<ARRocketPage>
   void dispose() {
     _launchTimer?.cancel();
     _countdownCompleteSub?.cancel();
+    _engineStateSub?.cancel();
     unawaited(_countdownPlayer.dispose());
     unawaited(_enginePlayer.dispose());
     WidgetsBinding.instance.removeObserver(this);
