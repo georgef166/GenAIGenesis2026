@@ -13,6 +13,7 @@ import 'package:ar_flutter_plugin_2/managers/ar_session_manager.dart';
 import 'package:ar_flutter_plugin_2/models/ar_anchor.dart';
 import 'package:ar_flutter_plugin_2/models/ar_hittest_result.dart';
 import 'package:ar_flutter_plugin_2/models/ar_node.dart';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:genai/rocket_parts.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -23,6 +24,7 @@ import 'package:vector_math/vector_math_64.dart' hide Colors;
 // ---------------------------------------------------------------------------
 const _rocketModelAssetPath = 'assets/models/saturn_v_-_nasa/scene.gltf';
 const _cloudModelAssetPath = 'assets/models/cloud.gltf';
+const _flameModelAssetPath = 'assets/models/flame_cone.gltf';
 const _iosPluginModelScaleCompensation = 100.0;
 
 const _backgroundColor = Color(0xFF05070B);
@@ -53,7 +55,10 @@ enum LaunchPhase { idle, lifting, gone }
 
 const _kLaunchAscendDistance = 2.0;
 const _kCloudLayerHeight = 1.4;
-const _kLaunchDelaySeconds = 2.0;
+const _kIdleBeforeCountdownSeconds = 1.0;
+const _kCountdownSeconds = 3.0;
+const _kLiftoffAtSeconds =
+  _kIdleBeforeCountdownSeconds + _kCountdownSeconds;
 const _kLaunchDurationSeconds = 6.0;
 
 // ---------------------------------------------------------------------------
@@ -89,8 +94,16 @@ class _ARRocketPageState extends State<ARRocketPage>
   LaunchPhase _launchPhase = LaunchPhase.idle;
   double _launchElapsed = 0.0;
   double _launchOffset = 0.0;
+  bool _countdownPlayed = false;
+  bool _engineStarted = false;
   ARNode? _cloudNode;
   bool _cloudVisible = false;
+  ARNode? _flameNode;
+  bool _flameVisible = false;
+
+  final AudioPlayer _countdownPlayer = AudioPlayer();
+  final AudioPlayer _enginePlayer = AudioPlayer();
+  static const _engineBaseVolume = 0.88;
 
   Vector3 get _rocketScale =>
       Platform.isIOS
@@ -103,6 +116,8 @@ class _ARRocketPageState extends State<ARRocketPage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _enginePlayer.setReleaseMode(ReleaseMode.loop);
+    _enginePlayer.setVolume(_engineBaseVolume);
     _ensureCameraPermission();
   }
 
@@ -356,11 +371,13 @@ class _ARRocketPageState extends State<ARRocketPage>
         _rocketNode = node;
         _state = ARPlacementState.placed;
         _message =
-            'Rocket placed! Launch begins in 2 seconds…';
+        'Rocket placed! Launch begins in 1 second…';
       });
 
       // Add cloud layer (parked off-scene until needed).
       await _addCloudLayer(anchor);
+      // Add flame node (parked off-scene until liftoff).
+      await _addFlameNode(anchor);
       // Begin launch countdown.
       _startLaunchSequence();
     } catch (error) {
@@ -445,10 +462,16 @@ class _ARRocketPageState extends State<ARRocketPage>
       if (rocketNode != null) objectManager?.removeNode(rocketNode);
       final cn = _cloudNode;
       if (cn != null) objectManager?.removeNode(cn);
+      final fn = _flameNode;
+      if (fn != null) objectManager?.removeNode(fn);
       if (rocketAnchor != null) anchorManager?.removeAnchor(rocketAnchor);
     } catch (_) {
       // Ignore cleanup errors and return the UI to placement mode anyway.
     }
+
+    await _countdownPlayer.stop();
+    await _enginePlayer.stop();
+    await _enginePlayer.setVolume(_engineBaseVolume);
 
     if (!mounted) return;
 
@@ -457,9 +480,13 @@ class _ARRocketPageState extends State<ARRocketPage>
       _rocketAnchor = null;
       _cloudNode = null;
       _cloudVisible = false;
+      _flameNode = null;
+      _flameVisible = false;
       _launchPhase = LaunchPhase.idle;
       _launchElapsed = 0.0;
       _launchOffset = 0.0;
+      _countdownPlayed = false;
+      _engineStarted = false;
       if (_hasHorizontalPlane) {
         _state = ARPlacementState.readyToPlace;
         _message = 'Tap a horizontal surface to place the rocket.';
@@ -480,6 +507,9 @@ class _ARRocketPageState extends State<ARRocketPage>
       _launchPhase = LaunchPhase.idle;
       _launchElapsed = 0.0;
       _launchOffset = 0.0;
+      _countdownPlayed = false;
+      _engineStarted = false;
+      _message = 'Rocket placed! Countdown starts in 1 second…';
     });
     const tickMs = 33;
     _launchTimer = Timer.periodic(
@@ -492,18 +522,31 @@ class _ARRocketPageState extends State<ARRocketPage>
     if (!mounted) return;
     _launchElapsed += dt;
 
+    if (!_countdownPlayed && _launchElapsed >= _kIdleBeforeCountdownSeconds) {
+      _countdownPlayed = true;
+      setState(() {
+        _message = '🔊 3... 2... 1...';
+      });
+      unawaited(_playCountdownAudio());
+    }
+
     if (_launchPhase == LaunchPhase.idle) {
-      if (_launchElapsed >= _kLaunchDelaySeconds) {
+      if (_launchElapsed >= _kLiftoffAtSeconds) {
         setState(() {
           _launchPhase = LaunchPhase.lifting;
-          _message = '🚀 Saturn V is launching!';
+          _message = '🚀 Liftoff! Saturn V is launching!';
         });
+        if (!_engineStarted) {
+          _engineStarted = true;
+          _showFlame();
+          unawaited(_startEngineAudio());
+        }
       }
       return;
     }
 
     if (_launchPhase == LaunchPhase.lifting) {
-      final t = ((_launchElapsed - _kLaunchDelaySeconds) /
+      final t = ((_launchElapsed - _kLiftoffAtSeconds) /
               _kLaunchDurationSeconds)
           .clamp(0.0, 1.0);
       final eased = _easeInOutCubic(t);
@@ -512,6 +555,12 @@ class _ARRocketPageState extends State<ARRocketPage>
       final rn = _rocketNode;
       if (rn != null) {
         rn.position = Vector3(0.0, _launchOffset, 0.0);
+      }
+      if (_flameVisible) {
+        final fn = _flameNode;
+        if (fn != null) {
+          fn.position = _flameLocalPosition(_launchOffset);
+        }
       }
 
       if (!_cloudVisible && _launchOffset >= _kCloudLayerHeight * 0.6) {
@@ -523,6 +572,8 @@ class _ARRocketPageState extends State<ARRocketPage>
           _launchPhase = LaunchPhase.gone;
           _message = '🌤 Saturn V has cleared the atmosphere!';
         });
+        _hideFlame();
+        unawaited(_fadeOutAndStopEngineAudio());
         _launchTimer?.cancel();
       }
     }
@@ -548,6 +599,79 @@ class _ARRocketPageState extends State<ARRocketPage>
     if (added ?? false) {
       _cloudNode = cloudNode;
     }
+  }
+
+  Future<void> _addFlameNode(ARPlaneAnchor anchor) async {
+    final om = _objectManager;
+    if (om == null) return;
+
+    final flameNode = ARNode(
+      type: NodeType.localGLTF2,
+      uri: _flameModelAssetPath,
+      scale: Vector3(
+        0.09 * _iosPluginModelScaleCompensation,
+        0.18 * _iosPluginModelScaleCompensation,
+        0.09 * _iosPluginModelScaleCompensation,
+      ),
+      position: Vector3(0.0, -10.0, 0.0),
+      rotation: Vector4(0.0, 1.0, 0.0, 0.0),
+    );
+
+    final didAdd = await om.addNode(flameNode, planeAnchor: anchor);
+    if (didAdd ?? false) {
+      _flameNode = flameNode;
+    }
+  }
+
+  Vector3 _flameLocalPosition(double rocketOffsetY) {
+    return Vector3(0.0, -0.16 + rocketOffsetY, 0.0);
+  }
+
+  void _showFlame() {
+    final fn = _flameNode;
+    if (fn == null) return;
+    _flameVisible = true;
+    fn.position = _flameLocalPosition(_launchOffset);
+  }
+
+  void _hideFlame() {
+    final fn = _flameNode;
+    if (fn == null) return;
+    _flameVisible = false;
+    fn.position = Vector3(0.0, -10.0, 0.0);
+  }
+
+  Future<void> _playCountdownAudio() async {
+    await _countdownPlayer.stop();
+    await _countdownPlayer.play(
+      AssetSource('audio/countdown_liftoff.aiff'),
+      volume: 1.0,
+    );
+  }
+
+  Future<void> _startEngineAudio() async {
+    await _enginePlayer.stop();
+    await _enginePlayer.setReleaseMode(ReleaseMode.loop);
+    await _enginePlayer.setVolume(_engineBaseVolume);
+    await _enginePlayer.play(
+      AssetSource('audio/rocket_engine_loop.wav'),
+      volume: _engineBaseVolume,
+    );
+  }
+
+  Future<void> _fadeOutAndStopEngineAudio() async {
+    const steps = 10;
+    const total = Duration(milliseconds: 900);
+    final stepMs = total.inMilliseconds ~/ steps;
+
+    for (var i = steps; i >= 1; i--) {
+      final vol = _engineBaseVolume * (i / steps);
+      await _enginePlayer.setVolume(vol);
+      await Future<void>.delayed(Duration(milliseconds: stepMs));
+    }
+
+    await _enginePlayer.stop();
+    await _enginePlayer.setVolume(_engineBaseVolume);
   }
 
   void _showCloudLayer() {
@@ -589,6 +713,8 @@ class _ARRocketPageState extends State<ARRocketPage>
   @override
   void dispose() {
     _launchTimer?.cancel();
+    unawaited(_countdownPlayer.dispose());
+    unawaited(_enginePlayer.dispose());
     WidgetsBinding.instance.removeObserver(this);
     _sessionManager?.dispose();
     super.dispose();

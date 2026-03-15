@@ -11,6 +11,7 @@ dependencies:
   flutter:
     sdk: flutter
   ar_flutter_plugin_2: ^0.0.3
+  audioplayers: ^6.1.0
   cupertino_icons: ^1.0.8
   permission_handler: ^11.3.1
   vector_math: ^2.2.0
@@ -26,6 +27,8 @@ flutter:
   assets:
     - assets/models/dot.gltf
     - assets/models/cloud.gltf
+    - assets/models/flame_cone.gltf
     - assets/models/flashcards/
     - assets/models/saturn_v_-_nasa/
     - assets/models/saturn_v_-_nasa/textures/
+    - assets/audio/
