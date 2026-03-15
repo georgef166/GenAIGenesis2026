@@ -27,6 +27,8 @@ flutter:
   assets:
     - assets/models/dot.gltf
     - assets/models/cloud.gltf
+    - assets/models/flame_sprite.gltf
+    - assets/models/flame_sprite.png
     - assets/models/flame_cone.gltf
     - assets/models/flame_inner.gltf
     - assets/models/smoke_plume.gltf
