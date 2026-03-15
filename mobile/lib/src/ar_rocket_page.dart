@@ -89,6 +89,7 @@ class _ARRocketPageState extends State<ARRocketPage>
   bool _hasInitializedSession = false;
   bool _isConfiguringSession = false;
   int _planeCount = 0;
+  bool _showPlacementUi = true;
 
   // Launch animation state
   Timer? _launchTimer;
@@ -394,9 +395,11 @@ class _ARRocketPageState extends State<ARRocketPage>
         _rocketAnchor = anchor;
         _rocketNode = node;
         _state = ARPlacementState.placed;
+        _showPlacementUi = false;
         _message =
         'Rocket placed! Launch begins in 1 second…';
       });
+      _sessionManager?.showPlanes(false);
 
       // Add cloud layer (parked off-scene until needed).
       await _addCloudLayer(anchor);
@@ -506,6 +509,7 @@ class _ARRocketPageState extends State<ARRocketPage>
       _rocketNode = null;
       _rocketAnchor = null;
       _cloudNode = null;
+      _showPlacementUi = true;
       _cloudVisible = false;
       _flamesVisible = false;
       _launchPhase = LaunchPhase.idle;
@@ -525,6 +529,7 @@ class _ARRocketPageState extends State<ARRocketPage>
         _message = 'Move your phone slowly to detect a flat surface.';
       }
     });
+    _sessionManager?.showPlanes(true);
   }
 
   // -------------------------------------------------------------------------
@@ -764,38 +769,39 @@ class _ARRocketPageState extends State<ARRocketPage>
               onARViewCreated: _onARViewCreated,
               planeDetectionConfig: PlaneDetectionConfig.horizontal,
             ),
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  // Status / instruction overlay
-                  ARStatusOverlay(
-                    state: _state,
-                    message: _message,
-                    isHorizontalPlaneAvailable: _hasHorizontalPlane,
-                    primaryActionLabel: _primaryActionLabel,
-                    onPrimaryAction: _primaryActionLabel == null
-                        ? null
-                        : _handlePrimaryAction,
-                    showReset: _rocketNode != null,
-                    onReset: _resetRocket,
-                    planeCount: _planeCount,
-                    launchPhase: _launchPhase,
-                  ),
-
-                  const Spacer(),
-
-                  // "Explore parts" button — visible only after placement.
-                  if (_state == ARPlacementState.placed)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: _ExplorePartsButton(onTap: _showPartsSheet),
+          if (_showPlacementUi)
+            SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    // Status / instruction overlay
+                    ARStatusOverlay(
+                      state: _state,
+                      message: _message,
+                      isHorizontalPlaneAvailable: _hasHorizontalPlane,
+                      primaryActionLabel: _primaryActionLabel,
+                      onPrimaryAction: _primaryActionLabel == null
+                          ? null
+                          : _handlePrimaryAction,
+                      showReset: _rocketNode != null,
+                      onReset: _resetRocket,
+                      planeCount: _planeCount,
+                      launchPhase: _launchPhase,
                     ),
-                ],
+
+                    const Spacer(),
+
+                    // "Explore parts" button — visible only after placement.
+                    if (_state == ARPlacementState.placed)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: _ExplorePartsButton(onTap: _showPartsSheet),
+                      ),
+                  ],
+                ),
               ),
             ),
-          ),
         ],
       ),
     );
