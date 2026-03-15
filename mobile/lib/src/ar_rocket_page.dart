@@ -123,12 +123,13 @@ class _ARRocketPageState extends State<ARRocketPage>
   bool _engineAudioRunning = false;
   static const _engineBaseVolume = 0.88;
 
-  Vector3 get _rocketScale =>
-      Platform.isIOS
-          ? Vector3(0.1 * _iosPluginModelScaleCompensation,
-              0.1 * _iosPluginModelScaleCompensation,
-              0.1 * _iosPluginModelScaleCompensation)
-          : Vector3(0.1, 0.1, 0.1);
+  Vector3 get _rocketScale => Platform.isIOS
+      ? Vector3(
+          0.1 * _iosPluginModelScaleCompensation,
+          0.1 * _iosPluginModelScaleCompensation,
+          0.1 * _iosPluginModelScaleCompensation,
+        )
+      : Vector3(0.1, 0.1, 0.1);
 
   @override
   void initState() {
@@ -380,8 +381,7 @@ class _ARRocketPageState extends State<ARRocketPage>
         rotation: Vector4(1.0, 0.0, 0.0, 0.0),
       );
 
-      final didAddNode =
-          await objectManager.addNode(node, planeAnchor: anchor);
+      final didAddNode = await objectManager.addNode(node, planeAnchor: anchor);
       if (!mounted) return;
 
       if (!(didAddNode ?? false)) {
@@ -398,8 +398,7 @@ class _ARRocketPageState extends State<ARRocketPage>
         _rocketNode = node;
         _state = ARPlacementState.placed;
         _showPlacementUi = false;
-        _message =
-        'Rocket placed! Launch begins in 1 second…';
+        _message = 'Rocket placed! Launch begins in 1 second…';
       });
       _sessionManager?.showPlanes(false);
 
@@ -579,7 +578,8 @@ class _ARRocketPageState extends State<ARRocketPage>
     if (_launchPhase == LaunchPhase.lifting) {
       final liftElapsed = _launchElapsed - _liftoffElapsed;
       final rampT = (liftElapsed / _kAscentRampSeconds).clamp(0.0, 1.0);
-      final speed = _kAscentInitialSpeedMps +
+      final speed =
+          _kAscentInitialSpeedMps +
           (_kAscentCruiseSpeedMps - _kAscentInitialSpeedMps) * rampT;
       _launchOffset += speed * dt;
 
@@ -670,7 +670,10 @@ class _ARRocketPageState extends State<ARRocketPage>
   void _updateFlameTransforms(double rocketOffsetY) {
     final count = math.min(_flameNodes.length, _engineOffsets.length);
     for (var i = 0; i < count; i++) {
-      _flameNodes[i].position = _flameLocalPosition(_engineOffsets[i], rocketOffsetY);
+      _flameNodes[i].position = _flameLocalPosition(
+        _engineOffsets[i],
+        rocketOffsetY,
+      );
     }
   }
 
@@ -758,6 +761,7 @@ class _ARRocketPageState extends State<ARRocketPage>
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppBar(
+        automaticallyImplyLeading: false,
         backgroundColor: Colors.transparent,
         elevation: 0,
         iconTheme: const IconThemeData(color: Colors.white),
@@ -872,15 +876,20 @@ class RocketPartsSheet extends StatelessWidget {
           decoration: BoxDecoration(
             color: const Color(0xFF060e15),
             border: Border(
-              top: BorderSide(color: _primaryColor.withValues(alpha: 0.4), width: 2),
+              top: BorderSide(
+                color: _primaryColor.withValues(alpha: 0.4),
+                width: 2,
+              ),
             ),
           ),
           child: Column(
             children: [
               // Header row
               Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 16,
+                ),
                 child: Row(
                   children: [
                     Icon(
@@ -897,8 +906,7 @@ class RocketPartsSheet extends StatelessWidget {
                     Expanded(
                       child: Text(
                         'ROCKET SUB-SYSTEMS',
-                        style:
-                            Theme.of(context).textTheme.titleLarge?.copyWith(
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
                           color: Colors.white,
                           fontWeight: FontWeight.w700,
                           letterSpacing: 1.2,
@@ -906,7 +914,10 @@ class RocketPartsSheet extends StatelessWidget {
                       ),
                     ),
                     IconButton(
-                      icon: const Icon(Icons.close_rounded, color: Colors.white54),
+                      icon: const Icon(
+                        Icons.close_rounded,
+                        color: Colors.white54,
+                      ),
                       onPressed: () => Navigator.of(context).pop(),
                     ),
                   ],
@@ -955,7 +966,10 @@ class _PartListTile extends StatelessWidget {
       child: Ink(
         decoration: BoxDecoration(
           border: Border(
-            left: BorderSide(color: _primaryColor.withValues(alpha: 0.5), width: 2),
+            left: BorderSide(
+              color: _primaryColor.withValues(alpha: 0.5),
+              width: 2,
+            ),
           ),
         ),
         child: Padding(
@@ -1019,7 +1033,10 @@ class PartDetailSheet extends StatelessWidget {
           decoration: BoxDecoration(
             color: const Color(0xFF060e15),
             border: Border(
-              top: BorderSide(color: _primaryColor.withValues(alpha: 0.4), width: 2),
+              top: BorderSide(
+                color: _primaryColor.withValues(alpha: 0.4),
+                width: 2,
+              ),
             ),
           ),
           child: Column(
@@ -1027,8 +1044,10 @@ class PartDetailSheet extends StatelessWidget {
             children: [
               // Title row
               Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 16,
+                ),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
@@ -1060,7 +1079,10 @@ class PartDetailSheet extends StatelessWidget {
                       ),
                     ),
                     IconButton(
-                      icon: const Icon(Icons.close_rounded, color: Colors.white54),
+                      icon: const Icon(
+                        Icons.close_rounded,
+                        color: Colors.white54,
+                      ),
                       onPressed: () => Navigator.of(context).pop(),
                     ),
                   ],
@@ -1123,13 +1145,11 @@ class ARStatusOverlay extends StatelessWidget {
     final theme = Theme.of(context);
     final icon = switch (state) {
       ARPlacementState.permissionRequired ||
-      ARPlacementState.permissionBlocked =>
-        Icons.videocam_rounded,
+      ARPlacementState.permissionBlocked => Icons.videocam_rounded,
       ARPlacementState.readyToPlace => Icons.touch_app_rounded,
       ARPlacementState.placed => Icons.rocket_launch_rounded,
       ARPlacementState.unsupported ||
-      ARPlacementState.error =>
-        Icons.warning_amber_rounded,
+      ARPlacementState.error => Icons.warning_amber_rounded,
       _ => Icons.view_in_ar_rounded,
     };
 
@@ -1176,9 +1196,7 @@ class ARStatusOverlay extends StatelessWidget {
             const SizedBox(height: 12),
             Text(
               message,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: _lightColor,
-              ),
+              style: theme.textTheme.bodyMedium?.copyWith(color: _lightColor),
             ),
             const SizedBox(height: 12),
             Wrap(
@@ -1308,14 +1326,11 @@ class ARStatusOverlay extends StatelessWidget {
         return 'AR error';
     }
   }
-  
+
   ButtonStyle get _buttonStyle => FilledButton.styleFrom(
     backgroundColor: _primaryColor,
     foregroundColor: Colors.black,
-    textStyle: const TextStyle(
-      fontWeight: FontWeight.w600,
-      letterSpacing: 1.1,
-    ),
+    textStyle: const TextStyle(fontWeight: FontWeight.w600, letterSpacing: 1.1),
     shape: const BeveledRectangleBorder(
       borderRadius: BorderRadius.only(
         topLeft: Radius.circular(12),
@@ -1348,9 +1363,10 @@ class _OverlayChip extends StatelessWidget {
             const SizedBox(width: 8),
             Text(
               label,
-              style: Theme.of(
-                context,
-              ).textTheme.labelLarge?.copyWith(color: Colors.white, letterSpacing: 1.1),
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                color: Colors.white,
+                letterSpacing: 1.1,
+              ),
             ),
           ],
         ),

@@ -874,6 +874,7 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppBar(
+        automaticallyImplyLeading: false,
         backgroundColor: Colors.transparent,
         elevation: 0,
         iconTheme: const IconThemeData(color: Colors.white),

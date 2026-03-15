@@ -64,6 +64,12 @@ class GenaiApp extends StatelessWidget {
 class HomePage extends StatelessWidget {
   const HomePage({super.key});
 
+  void _openScreen(BuildContext context, Widget child) {
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => _TopRightBackShell(child: child)));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -71,32 +77,20 @@ class HomePage extends StatelessWidget {
         child: Stack(
           children: [
             Positioned(
-              top: 16,
-              left: 16,
-              child: Text(
-                'GENAI AR',
-                style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                  color: Colors.white,
-                  letterSpacing: 1.2,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-            Align(
-              alignment: Alignment.topRight,
+              top: 8,
+              right: 0,
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 300, minWidth: 230),
+                constraints: const BoxConstraints(maxWidth: 235, minWidth: 210),
                 child: Container(
-                  margin: const EdgeInsets.only(top: 12, right: 12),
-                  padding: const EdgeInsets.all(10),
+                  padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.22),
+                    color: Colors.black.withValues(alpha: 0.2),
                     border: Border.all(
-                      color: _primaryColor.withValues(alpha: 0.35),
+                      color: _primaryColor.withValues(alpha: 0.3),
                     ),
                     borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(14),
-                      bottomRight: Radius.circular(14),
+                      topLeft: Radius.circular(10),
+                      bottomRight: Radius.circular(10),
                     ),
                   ),
                   child: Column(
@@ -106,39 +100,38 @@ class HomePage extends StatelessWidget {
                         title: 'AI Model Generator',
                         icon: Icons.auto_awesome_rounded,
                         onTap: () {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) => const ARMeshyPage(),
-                            ),
-                          );
+                          _openScreen(context, const ARMeshyPage());
                         },
                       ),
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 6),
                       _MenuButton(
                         title: 'Saturn V Rocket Explorer',
                         icon: Icons.rocket_launch_rounded,
                         onTap: () {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) => const ARRocketPage(),
-                            ),
-                          );
+                          _openScreen(context, const ARRocketPage());
                         },
                       ),
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 6),
                       _MenuButton(
                         title: 'Saturn V Diagram',
                         icon: Icons.schema_rounded,
                         onTap: () {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) => const ARDiagramPage(),
-                            ),
-                          );
+                          _openScreen(context, const ARDiagramPage());
                         },
                       ),
                     ],
                   ),
+                ),
+              ),
+            ),
+            Align(
+              child: Text(
+                'GENAI AR EXPERIENCES',
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.displaySmall?.copyWith(
+                  color: _primaryColor.withValues(alpha: 0.96),
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.8,
                 ),
               ),
             ),
@@ -149,45 +142,74 @@ class HomePage extends StatelessWidget {
   }
 }
 
+class _TopRightBackShell extends StatelessWidget {
+  const _TopRightBackShell({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        child,
+        SafeArea(
+          child: Align(
+            alignment: Alignment.topRight,
+            child: _MenuButton(
+              title: 'Back',
+              icon: Icons.arrow_back_rounded,
+              onTap: () => Navigator.of(context).maybePop(),
+              width: 108,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _MenuButton extends StatelessWidget {
   const _MenuButton({
     required this.title,
     required this.icon,
     required this.onTap,
+    this.width,
   });
 
   final String title;
   final IconData icon;
   final VoidCallback onTap;
+  final double? width;
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 56,
-      width: double.infinity,
+      height: 42,
+      width: width ?? double.infinity,
       child: FilledButton.icon(
         onPressed: onTap,
         style: FilledButton.styleFrom(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           backgroundColor: _primaryColor.withValues(alpha: 0.92),
           foregroundColor: Colors.black,
           alignment: Alignment.centerLeft,
           shape: const BeveledRectangleBorder(
             borderRadius: BorderRadius.only(
-              topLeft: Radius.circular(12),
-              bottomRight: Radius.circular(12),
+              topLeft: Radius.circular(8),
+              bottomRight: Radius.circular(8),
             ),
           ),
         ),
-        icon: Icon(icon, size: 18),
+        icon: Icon(icon, size: 14),
         label: Text(
           title,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(
-            fontSize: 13,
+            fontSize: 11,
             fontWeight: FontWeight.w700,
-            letterSpacing: 0.5,
+            letterSpacing: 0.3,
           ),
         ),
       ),
