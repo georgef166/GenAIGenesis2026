@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:ar_flutter_plugin_2/ar_flutter_plugin.dart';
 import 'package:ar_flutter_plugin_2/datatypes/config_planedetection.dart';
 import 'package:ar_flutter_plugin_2/datatypes/hittest_result_types.dart';
-import 'package:ar_flutter_plugin_2/datatypes/node_types.dart';
 import 'package:ar_flutter_plugin_2/managers/ar_anchor_manager.dart';
 import 'package:ar_flutter_plugin_2/managers/ar_location_manager.dart';
 import 'package:ar_flutter_plugin_2/managers/ar_object_manager.dart';
@@ -15,6 +14,7 @@ import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:vector_math/vector_math_64.dart' hide Colors;
 
+import 'meshy_model_history.dart';
 import 'meshy_proxy_client.dart';
 
 const _backgroundColor = Color(0xFF02040a);
@@ -57,6 +57,11 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
   final TextEditingController _promptController = TextEditingController();
   late final MeshyProxyConfiguration _proxyConfiguration =
       MeshyProxyConfiguration.fromEnvironment();
+  late final MeshyModelHistoryStore _modelHistoryStore =
+      MeshyModelHistoryStore();
+  late final MeshyPlacementRuntime _placementRuntime =
+      detectMeshyPlacementRuntime();
+  final List<MeshyModelRecord> _recentModels = <MeshyModelRecord>[];
 
   ARSessionManager? _sessionManager;
   ARObjectManager? _objectManager;
@@ -70,11 +75,12 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
   String? _sessionErrorMessage;
   String? _generationErrorMessage;
   MeshyGenerationJob? _currentJob;
-  String? _generatedModelUrl;
+  MeshyActiveModel? _activeModel;
   bool _isCameraPermissionGranted = false;
   bool _hasHorizontalPlane = false;
   bool _hasInitializedSession = false;
   bool _isConfiguringSession = false;
+  bool _isLoadingHistory = true;
   int _planeCount = 0;
   int _generationToken = 0;
   bool _showPlacementUi = true;
@@ -86,7 +92,7 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
       _generationStage == MeshyGenerationStage.previewing ||
       _generationStage == MeshyGenerationStage.refining;
 
-  bool get _hasGeneratedModel => _generatedModelUrl != null;
+  bool get _hasGeneratedModel => _activeModel != null;
 
   String? get _currentJobId => _currentJob?.jobId;
 
@@ -154,6 +160,9 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
 
     switch (_generationStage) {
       case MeshyGenerationStage.missingProxyConfig:
+        if (_recentModels.isNotEmpty) {
+          return 'Load a recent model';
+        }
         return 'Server config required';
       case MeshyGenerationStage.submitting:
         return 'Submitting prompt';
@@ -197,6 +206,10 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
 
     switch (_generationStage) {
       case MeshyGenerationStage.missingProxyConfig:
+        if (_recentModels.isNotEmpty) {
+          return 'Recent models are available below. Configure the proxy only '
+              'if you want to generate a new one.';
+        }
         return _proxyConfiguration.error ??
             'The app is missing the Meshy proxy base URL.';
       case MeshyGenerationStage.submitting:
@@ -214,9 +227,15 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
         return _generationErrorMessage ?? 'Meshy could not generate a model.';
       case MeshyGenerationStage.ready:
         return _hasHorizontalPlane
-            ? 'Tap a horizontal surface to place the generated model.'
+            ? 'Tap a horizontal surface to place the selected model.'
             : 'Model ready. Move your phone slowly to detect a flat surface.';
       case MeshyGenerationStage.idle:
+        if (_recentModels.isNotEmpty) {
+          return _hasHorizontalPlane
+              ? 'Enter a prompt or load a recent model, then tap to place it.'
+              : 'Enter a prompt or load a recent model, and move your phone '
+                    'slowly to detect a flat surface.';
+        }
         return _hasHorizontalPlane
             ? 'Enter a prompt, generate a model, then tap to place it.'
             : 'Enter a prompt, generate a model, and move your phone slowly '
@@ -231,6 +250,10 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
 
     switch (_generationStage) {
       case MeshyGenerationStage.missingProxyConfig:
+        if (_recentModels.isNotEmpty) {
+          return 'Recent models remain available below. '
+              'Set MESHY_PROXY_BASE_URL to generate new ones.';
+        }
         return _proxyConfiguration.error ??
             'Set MESHY_PROXY_BASE_URL before running the app.';
       case MeshyGenerationStage.submitting:
@@ -249,7 +272,9 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
               '$currentJobSuffix',
         );
       case MeshyGenerationStage.ready:
-        return 'Meshy model ready. Tap a plane to place it.';
+        return _activeModel?.isPersisted == true
+            ? 'Saved model ready. Tap a plane to place it.'
+            : 'Meshy model ready. Tap a plane to place it.';
       case MeshyGenerationStage.error:
         return _generationErrorMessage ?? 'Meshy generation failed.';
       case MeshyGenerationStage.idle:
@@ -287,6 +312,7 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
         ? MeshyGenerationStage.missingProxyConfig
         : MeshyGenerationStage.idle;
     _generationErrorMessage = _proxyConfiguration.error;
+    _loadRecentModels();
     _ensureCameraPermission();
   }
 
@@ -303,6 +329,31 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
     }
 
     setState(() {});
+  }
+
+  Future<void> _loadRecentModels() async {
+    try {
+      final records = await _modelHistoryStore.loadRecords();
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _recentModels
+          ..clear()
+          ..addAll(records);
+        _isLoadingHistory = false;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _isLoadingHistory = false;
+      });
+      _showTransientMessage('Failed to load saved Meshy models: $error');
+    }
   }
 
   Future<void> _ensureCameraPermission({bool requestIfNeeded = true}) async {
@@ -441,11 +492,12 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
   ) async {
     final anchorManager = _anchorManager;
     final objectManager = _objectManager;
+    final activeModel = _activeModel;
     if (anchorManager == null ||
         objectManager == null ||
         !_hasInitializedSession ||
         !_hasHorizontalPlane ||
-        !_hasGeneratedModel ||
+        activeModel == null ||
         _modelNode != null ||
         _sessionState == ARSessionState.placing) {
       return;
@@ -475,17 +527,22 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
         return;
       }
 
-      final node = ARNode(
-        type: NodeType.webGLB,
-        uri: _generatedModelUrl!,
-        scale: Vector3.all(_generatedModelScale),
-        position: Vector3(0.0, 0.01, 0.0),
-        rotation: Vector4(0.0, 1.0, 0.0, 0.0),
-      );
-
-      final didAddNode = await objectManager.addNode(node, planeAnchor: anchor);
+      var placedModel = activeModel;
+      var node = _buildARNode(placedModel);
+      var didAddNode = await objectManager.addNode(node, planeAnchor: anchor);
       if (!mounted) {
         return;
+      }
+
+      var usedFallbackSource = false;
+      if (!(didAddNode ?? false)) {
+        final fallbackModel = placedModel.fallbackAfterPlacementFailure();
+        if (fallbackModel != null) {
+          placedModel = fallbackModel;
+          node = _buildARNode(placedModel);
+          didAddNode = await objectManager.addNode(node, planeAnchor: anchor);
+          usedFallbackSource = didAddNode ?? false;
+        }
       }
 
       if (!(didAddNode ?? false)) {
@@ -501,11 +558,18 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
       setState(() {
         _modelAnchor = anchor;
         _modelNode = node;
+        _activeModel = placedModel;
         _sessionState = ARSessionState.placed;
         _sessionErrorMessage = null;
         _showPlacementUi = false;
       });
       _sessionManager?.showPlanes(false);
+      if (usedFallbackSource) {
+        _showTransientMessage(
+          'Used the original Meshy URL because the saved local model '
+          'could not be loaded on this device.',
+        );
+      }
     } catch (error) {
       if (!mounted) {
         return;
@@ -516,6 +580,16 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
         _sessionErrorMessage = 'Failed to place the generated model: $error';
       });
     }
+  }
+
+  ARNode _buildARNode(MeshyActiveModel model) {
+    return ARNode(
+      type: model.nodeType,
+      uri: model.nodeUri,
+      scale: Vector3.all(_generatedModelScale),
+      position: Vector3(0.0, 0.01, 0.0),
+      rotation: Vector4(0.0, 1.0, 0.0, 0.0),
+    );
   }
 
   ARHitTestResult? _firstPlaneHit(List<ARHitTestResult> hitTestResults) {
@@ -632,12 +706,44 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
             return;
           }
 
+          var activeModel = MeshyActiveModel.remoteSession(
+            id: job.jobId,
+            prompt: job.prompt,
+            glbUrl: glbUrl,
+            thumbnailUrl: job.thumbnailUrl,
+          );
+          String? cacheWarningMessage;
+          try {
+            final cacheResult = await _modelHistoryStore.cacheCompletedJob(
+              job: job,
+            );
+            activeModel = MeshyActiveModel.fromRecord(
+              cacheResult.record,
+              runtime: _placementRuntime,
+            );
+            final records = await _modelHistoryStore.loadRecords();
+            if (mounted) {
+              setState(() {
+                _recentModels
+                  ..clear()
+                  ..addAll(records);
+              });
+            }
+          } catch (error) {
+            cacheWarningMessage =
+                'Model ready for this session, but it could not be saved '
+                'locally for reuse: $error';
+          }
+
           setState(() {
-            _generatedModelUrl = glbUrl;
+            _activeModel = activeModel;
             _generationStage = MeshyGenerationStage.ready;
             _generationErrorMessage = null;
           });
           _syncReadyState();
+          if (cacheWarningMessage != null) {
+            _showTransientMessage(cacheWarningMessage);
+          }
           return;
         }
 
@@ -661,11 +767,49 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
       _currentJob = null;
       _modelAnchor = null;
       _modelNode = null;
-      _generatedModelUrl = null;
+      _activeModel = null;
       _sessionErrorMessage = null;
       _showPlacementUi = true;
     });
     _sessionManager?.showPlanes(true);
+  }
+
+  Future<void> _handleRecentModelSelected(MeshyModelRecord record) async {
+    if (_isGenerating) {
+      return;
+    }
+
+    _generationToken++;
+    await _removePlacedModel();
+    await _modelHistoryStore.markUsed(record.id);
+    final records = await _modelHistoryStore.loadRecords();
+    if (!mounted) {
+      return;
+    }
+
+    _promptController.value = TextEditingValue(
+      text: record.prompt,
+      selection: TextSelection.collapsed(offset: record.prompt.length),
+    );
+
+    setState(() {
+      _currentJob = null;
+      _modelAnchor = null;
+      _modelNode = null;
+      _activeModel = MeshyActiveModel.fromRecord(
+        record,
+        runtime: _placementRuntime,
+      );
+      _generationStage = MeshyGenerationStage.ready;
+      _generationErrorMessage = null;
+      _sessionErrorMessage = null;
+      _showPlacementUi = true;
+      _recentModels
+        ..clear()
+        ..addAll(records);
+    });
+    _sessionManager?.showPlanes(true);
+    _syncReadyState();
   }
 
   Future<void> _resetPlacedModel() async {
@@ -860,6 +1004,7 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
       ..removeListener(_handlePromptChanged)
       ..dispose();
     WidgetsBinding.instance.removeObserver(this);
+    _modelHistoryStore.close();
     _sessionManager?.dispose();
     super.dispose();
   }
@@ -924,6 +1069,12 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
                     helperText: _promptHelperText,
                     generateLabel: _generateButtonLabel,
                     onGenerate: canGenerate ? _handleGeneratePressed : null,
+                    recentModels: _recentModels,
+                    isLoadingRecentModels: _isLoadingHistory,
+                    onSelectRecentModel: _isGenerating
+                        ? null
+                        : _handleRecentModelSelected,
+                    activeModelId: _activeModel?.id,
                   ),
                 ),
               ),
@@ -1015,6 +1166,12 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
       return '${diff.inMinutes}m ago';
     }
     return '${diff.inHours}h ago';
+  }
+
+  void _showTransientMessage(String message) {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    messenger?.hideCurrentSnackBar();
+    messenger?.showSnackBar(SnackBar(content: Text(message)));
   }
 }
 
@@ -1145,16 +1302,25 @@ class MeshyPromptPanel extends StatelessWidget {
     required this.helperText,
     required this.generateLabel,
     required this.onGenerate,
+    this.recentModels = const <MeshyModelRecord>[],
+    this.isLoadingRecentModels = false,
+    this.onSelectRecentModel,
+    this.activeModelId,
   });
 
   final TextEditingController promptController;
   final String helperText;
   final String generateLabel;
   final VoidCallback? onGenerate;
+  final List<MeshyModelRecord> recentModels;
+  final bool isLoadingRecentModels;
+  final ValueChanged<MeshyModelRecord>? onSelectRecentModel;
+  final String? activeModelId;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final showRecentModels = isLoadingRecentModels || recentModels.isNotEmpty;
 
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -1168,6 +1334,38 @@ class MeshyPromptPanel extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (showRecentModels) ...[
+              Text(
+                'Recent Models',
+                style: theme.textTheme.titleSmall?.copyWith(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                height: 92,
+                child: isLoadingRecentModels
+                    ? const Center(child: CircularProgressIndicator())
+                    : ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        itemBuilder: (context, index) {
+                          final record = recentModels[index];
+                          return _RecentModelCard(
+                            record: record,
+                            isActive: activeModelId == record.id,
+                            onTap: onSelectRecentModel == null
+                                ? null
+                                : () => onSelectRecentModel!(record),
+                          );
+                        },
+                        separatorBuilder: (context, index) =>
+                            const SizedBox(width: 10),
+                        itemCount: recentModels.length,
+                      ),
+              ),
+              const SizedBox(height: 16),
+            ],
             Text(
               'Meshy Prompt',
               style: theme.textTheme.titleMedium?.copyWith(
@@ -1229,6 +1427,77 @@ class MeshyPromptPanel extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+class _RecentModelCard extends StatelessWidget {
+  const _RecentModelCard({
+    required this.record,
+    required this.isActive,
+    required this.onTap,
+  });
+
+  final MeshyModelRecord record;
+  final bool isActive;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final borderColor = isActive
+        ? theme.colorScheme.primary
+        : Colors.white.withValues(alpha: 0.12);
+
+    return SizedBox(
+      width: 200,
+      child: Material(
+        color: Colors.black.withValues(alpha: 0.22),
+        borderRadius: BorderRadius.circular(18),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(18),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: borderColor),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    record.prompt,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    _formatRecordTimestamp(record.createdAt),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: Colors.white.withValues(alpha: 0.72),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  static String _formatRecordTimestamp(DateTime timestamp) {
+    final local = timestamp.toLocal();
+    final month = local.month.toString().padLeft(2, '0');
+    final day = local.day.toString().padLeft(2, '0');
+    final hour = local.hour.toString().padLeft(2, '0');
+    final minute = local.minute.toString().padLeft(2, '0');
+    return '$month/$day $hour:$minute';
   }
 }
 

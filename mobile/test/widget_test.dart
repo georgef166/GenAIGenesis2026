@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:genai/src/ar_meshy_page.dart';
+import 'package:genai/src/meshy_model_history.dart';
 
 void main() {
   testWidgets('overlay shows reset action when a model is placed', (
@@ -86,6 +87,49 @@ void main() {
 
     final button = tester.widget<FilledButton>(find.byType(FilledButton));
     expect(button.onPressed, isNull);
+  });
+
+  testWidgets('prompt panel can surface and load recent models', (
+    WidgetTester tester,
+  ) async {
+    final controller = TextEditingController();
+    MeshyModelRecord? selectedRecord;
+    addTearDown(controller.dispose);
+
+    final record = MeshyModelRecord(
+      id: 'job-1',
+      prompt: 'a brass owl automaton',
+      localRelativePath: 'meshy_models/job-1.glb',
+      originalGlbUrl: 'https://example.com/job-1.glb',
+      createdAt: DateTime.utc(2026, 3, 15, 12),
+      updatedAt: DateTime.utc(2026, 3, 15, 12),
+      lastUsedAt: DateTime.utc(2026, 3, 15, 12),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MeshyPromptPanel(
+            promptController: controller,
+            helperText: 'Load a recent model or generate a new one.',
+            generateLabel: 'Generate model',
+            onGenerate: _noop,
+            recentModels: <MeshyModelRecord>[record],
+            onSelectRecentModel: (selected) {
+              selectedRecord = selected;
+            },
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('Recent Models'), findsOneWidget);
+    expect(find.text('a brass owl automaton'), findsOneWidget);
+
+    await tester.tap(find.text('a brass owl automaton'));
+    await tester.pump();
+
+    expect(selectedRecord?.id, 'job-1');
   });
 }
 
