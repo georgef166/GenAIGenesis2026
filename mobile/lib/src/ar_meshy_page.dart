@@ -251,8 +251,9 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
       case MeshyGenerationStage.error:
         return _generationErrorMessage ?? 'Meshy generation failed.';
       case MeshyGenerationStage.idle:
-        return 'Run the proxy on your computer and start Flutter with '
-            '--dart-define=MESHY_PROXY_BASE_URL=http://<LAN-IP>:8080.';
+        return 'Run the proxy on your computer at http://nixos:8080. '
+            'Use --dart-define=MESHY_PROXY_BASE_URL=http://<LAN-IP>:8080 '
+            'to override it.';
     }
   }
 
