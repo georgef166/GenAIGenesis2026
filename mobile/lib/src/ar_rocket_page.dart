@@ -19,6 +19,10 @@ import 'package:genai/rocket_parts.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:vector_math/vector_math_64.dart' hide Colors;
 
+const _backgroundColor = Color(0xFF02040a);
+const _primaryColor = Color(0xFF00ffff);
+const _lightColor = Color(0xFF80ffde);
+
 // ---------------------------------------------------------------------------
 // Asset path
 // ---------------------------------------------------------------------------
@@ -26,8 +30,6 @@ const _rocketModelAssetPath = 'assets/models/saturn_v_-_nasa/scene.gltf';
 const _cloudModelAssetPath = 'assets/models/cloud.gltf';
 const _flameSpriteModelAssetPath = 'assets/models/flame_sprite.gltf';
 const _iosPluginModelScaleCompensation = 100.0;
-
-const _backgroundColor = Color(0xFF05070B);
 
 // ---------------------------------------------------------------------------
 // Placement state machine
@@ -819,18 +821,27 @@ class _ExplorePartsButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
     return FilledButton.icon(
       style: FilledButton.styleFrom(
-        backgroundColor: colorScheme.primary,
+        backgroundColor: _primaryColor,
+        foregroundColor: Colors.black,
         minimumSize: const Size.fromHeight(52),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape: const BeveledRectangleBorder(
+          borderRadius: BorderRadius.only(
+            topLeft: Radius.circular(16),
+            bottomRight: Radius.circular(16),
+          ),
+        ),
       ),
       onPressed: onTap,
       icon: const Icon(Icons.rocket_launch_rounded),
       label: const Text(
-        'Explore rocket parts',
-        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        'EXPLORE ROCKET PARTS',
+        style: TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.w600,
+          letterSpacing: 1.1,
+        ),
       ),
     );
   }
@@ -852,8 +863,6 @@ class RocketPartsSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-
     return DraggableScrollableSheet(
       initialChildSize: 0.55,
       minChildSize: 0.35,
@@ -861,59 +870,49 @@ class RocketPartsSheet extends StatelessWidget {
       builder: (_, scrollController) {
         return DecoratedBox(
           decoration: BoxDecoration(
-            color: const Color(0xFF0D1117),
-            borderRadius:
-                const BorderRadius.vertical(top: Radius.circular(28)),
+            color: const Color(0xFF060e15),
             border: Border(
-              top: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+              top: BorderSide(color: _primaryColor.withValues(alpha: 0.4), width: 2),
             ),
           ),
           child: Column(
             children: [
-              // Drag handle
-              Padding(
-                padding: const EdgeInsets.only(top: 12, bottom: 8),
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.25),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
               // Header row
               Padding(
                 padding:
-                    const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
                 child: Row(
                   children: [
                     Icon(
                       Icons.rocket_launch_rounded,
-                      color: colorScheme.primary,
+                      color: _primaryColor,
+                      shadows: [
+                        BoxShadow(
+                          color: _primaryColor.withValues(alpha: 0.5),
+                          blurRadius: 8,
+                        ),
+                      ],
                     ),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Text(
-                        'Rocket Parts',
+                        'ROCKET SUB-SYSTEMS',
                         style:
                             Theme.of(context).textTheme.titleLarge?.copyWith(
                           color: Colors.white,
                           fontWeight: FontWeight.w700,
+                          letterSpacing: 1.2,
                         ),
                       ),
                     ),
                     IconButton(
-                      icon: const Icon(
-                        Icons.close_rounded,
-                        color: Colors.white54,
-                      ),
+                      icon: const Icon(Icons.close_rounded, color: Colors.white54),
                       onPressed: () => Navigator.of(context).pop(),
                     ),
                   ],
                 ),
               ),
-              const Divider(color: Colors.white12, height: 1),
+              const Divider(color: _primaryColor, height: 1),
               // Parts list
               Expanded(
                 child: ListView.separated(
@@ -949,16 +948,15 @@ class _PartListTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
+      splashColor: _primaryColor.withValues(alpha: 0.2),
+      highlightColor: _primaryColor.withValues(alpha: 0.1),
       child: Ink(
         decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.05),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+          border: Border(
+            left: BorderSide(color: _primaryColor.withValues(alpha: 0.5), width: 2),
+          ),
         ),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -971,25 +969,26 @@ class _PartListTile extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      part.name,
+                      part.name.toUpperCase(),
                       style: const TextStyle(
                         color: Colors.white,
                         fontWeight: FontWeight.w600,
                         fontSize: 15,
+                        letterSpacing: 1.1,
                       ),
                     ),
                     const SizedBox(height: 2),
                     Text(
                       part.shortDescription,
                       style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.6),
+                        color: _lightColor.withValues(alpha: 0.8),
                         fontSize: 13,
                       ),
                     ),
                   ],
                 ),
               ),
-              Icon(Icons.chevron_right_rounded, color: colorScheme.primary),
+              Icon(Icons.chevron_right_rounded, color: _primaryColor),
             ],
           ),
         ),
@@ -1009,7 +1008,6 @@ class PartDetailSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
     final bottomPadding = MediaQuery.of(context).padding.bottom;
 
     return DraggableScrollableSheet(
@@ -1019,59 +1017,41 @@ class PartDetailSheet extends StatelessWidget {
       builder: (_, scrollController) {
         return DecoratedBox(
           decoration: BoxDecoration(
-            color: const Color(0xFF0D1117),
-            borderRadius:
-                const BorderRadius.vertical(top: Radius.circular(28)),
+            color: const Color(0xFF060e15),
             border: Border(
-              top: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+              top: BorderSide(color: _primaryColor.withValues(alpha: 0.4), width: 2),
             ),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Drag handle
-              Padding(
-                padding: const EdgeInsets.only(top: 12, bottom: 8),
-                child: Center(
-                  child: Container(
-                    width: 40,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.25),
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                ),
-              ),
               // Title row
               Padding(
                 padding:
-                    const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    Text(
-                      part.emoji,
-                      style: const TextStyle(fontSize: 34),
-                    ),
+                    Text(part.emoji, style: const TextStyle(fontSize: 34)),
                     const SizedBox(width: 14),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            part.name,
+                            part.name.toUpperCase(),
                             style: const TextStyle(
                               color: Colors.white,
                               fontWeight: FontWeight.w700,
                               fontSize: 20,
+                              letterSpacing: 1.2,
                             ),
                           ),
                           const SizedBox(height: 2),
                           Text(
                             part.shortDescription,
-                            style: TextStyle(
-                              color: colorScheme.primary,
+                            style: const TextStyle(
+                              color: _primaryColor,
                               fontWeight: FontWeight.w500,
                               fontSize: 13,
                             ),
@@ -1080,16 +1060,13 @@ class PartDetailSheet extends StatelessWidget {
                       ),
                     ),
                     IconButton(
-                      icon: const Icon(
-                        Icons.close_rounded,
-                        color: Colors.white54,
-                      ),
+                      icon: const Icon(Icons.close_rounded, color: Colors.white54),
                       onPressed: () => Navigator.of(context).pop(),
                     ),
                   ],
                 ),
               ),
-              const Divider(color: Colors.white12, height: 1),
+              const Divider(color: _primaryColor, height: 1, thickness: 1),
               // Scrollable detail body
               Expanded(
                 child: SingleChildScrollView(
@@ -1098,7 +1075,7 @@ class PartDetailSheet extends StatelessWidget {
                   child: Text(
                     part.details,
                     style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.85),
+                      color: _lightColor.withValues(alpha: 0.9),
                       fontSize: 15,
                       height: 1.65,
                     ),
@@ -1144,7 +1121,6 @@ class ARStatusOverlay extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
     final icon = switch (state) {
       ARPlacementState.permissionRequired ||
       ARPlacementState.permissionBlocked =>
@@ -1159,8 +1135,12 @@ class ARStatusOverlay extends StatelessWidget {
 
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.72),
-        borderRadius: BorderRadius.circular(24),
+        color: _backgroundColor.withValues(alpha: 0.8),
+        border: Border.all(color: _primaryColor.withValues(alpha: 0.5)),
+        borderRadius: const BorderRadius.only(
+          topLeft: Radius.circular(24),
+          bottomRight: Radius.circular(24),
+        ),
       ),
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -1170,14 +1150,24 @@ class ARStatusOverlay extends StatelessWidget {
           children: [
             Row(
               children: [
-                Icon(icon, color: colorScheme.primary),
+                Icon(
+                  icon,
+                  color: _primaryColor,
+                  shadows: [
+                    BoxShadow(
+                      color: _primaryColor.withValues(alpha: 0.5),
+                      blurRadius: 8,
+                    ),
+                  ],
+                ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    _titleForState(state),
+                    _titleForState(state).toUpperCase(),
                     style: theme.textTheme.titleMedium?.copyWith(
                       color: Colors.white,
                       fontWeight: FontWeight.w600,
+                      letterSpacing: 1.2,
                     ),
                   ),
                 ),
@@ -1187,7 +1177,7 @@ class ARStatusOverlay extends StatelessWidget {
             Text(
               message,
               style: theme.textTheme.bodyMedium?.copyWith(
-                color: Colors.white.withValues(alpha: 0.92),
+                color: _lightColor,
               ),
             ),
             const SizedBox(height: 12),
@@ -1222,6 +1212,7 @@ class ARStatusOverlay extends StatelessWidget {
             if (primaryActionLabel != null) ...[
               const SizedBox(height: 16),
               FilledButton.icon(
+                style: _buttonStyle,
                 onPressed: onPrimaryAction,
                 icon: Icon(
                   state == ARPlacementState.permissionBlocked
@@ -1234,9 +1225,10 @@ class ARStatusOverlay extends StatelessWidget {
             if (showReset) ...[
               const SizedBox(height: 16),
               FilledButton.icon(
+                style: _buttonStyle,
                 onPressed: onReset,
                 icon: const Icon(Icons.refresh_rounded),
-                label: const Text('Reset rocket'),
+                label: const Text('RESET ROCKET'),
               ),
             ],
           ],
@@ -1316,6 +1308,21 @@ class ARStatusOverlay extends StatelessWidget {
         return 'AR error';
     }
   }
+  
+  ButtonStyle get _buttonStyle => FilledButton.styleFrom(
+    backgroundColor: _primaryColor,
+    foregroundColor: Colors.black,
+    textStyle: const TextStyle(
+      fontWeight: FontWeight.w600,
+      letterSpacing: 1.1,
+    ),
+    shape: const BeveledRectangleBorder(
+      borderRadius: BorderRadius.only(
+        topLeft: Radius.circular(12),
+        bottomRight: Radius.circular(12),
+      ),
+    ),
+  );
 }
 
 class _OverlayChip extends StatelessWidget {
@@ -1328,22 +1335,22 @@ class _OverlayChip extends StatelessWidget {
   Widget build(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.08),
+        color: _primaryColor.withValues(alpha: 0.1),
+        border: Border.all(color: _primaryColor.withValues(alpha: 0.4)),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
       ),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 16, color: Colors.white70),
+            Icon(icon, size: 16, color: _lightColor),
             const SizedBox(width: 8),
             Text(
               label,
               style: Theme.of(
                 context,
-              ).textTheme.labelLarge?.copyWith(color: Colors.white),
+              ).textTheme.labelLarge?.copyWith(color: Colors.white, letterSpacing: 1.1),
             ),
           ],
         ),

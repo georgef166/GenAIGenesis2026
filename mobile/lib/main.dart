@@ -4,7 +4,13 @@ import 'src/ar_meshy_page.dart';
 import 'src/ar_rocket_page.dart';
 import 'src/ar_diagram_page.dart';
 
-const _backgroundColor = Color(0xFF05070B);
+// ---------------------------------------------------------------------------
+// Main entry point & App root
+// ---------------------------------------------------------------------------
+
+const _backgroundColor = Color(0xFF02040a);
+const _primaryColor = Color(0xFF00ffff);
+const _lightColor = Color(0xFF80ffde);
 
 void main() {
   runApp(const GenaiApp());
@@ -20,16 +26,34 @@ class GenaiApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF0F8CFF),
+          seedColor: _primaryColor,
           brightness: Brightness.dark,
         ),
         useMaterial3: true,
         scaffoldBackgroundColor: _backgroundColor,
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          titleTextStyle: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 1.2,
+          ),
+        ),
+        textTheme: Theme.of(context).textTheme.apply(
+              fontFamily: 'RobotoMono',
+              bodyColor: _lightColor,
+              displayColor: Colors.white,
+            ),
       ),
       home: const HomePage(),
     );
   }
 }
+
+// ---------------------------------------------------------------------------
+// Home page: Feature selection
+// ---------------------------------------------------------------------------
 
 class HomePage extends StatelessWidget {
   const HomePage({super.key});
@@ -37,11 +61,7 @@ class HomePage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('GenAI AR'),
-        backgroundColor: Colors.black26,
-        elevation: 0,
-      ),
+      appBar: AppBar(title: const Text('GENAI AR EXPERIENCES')),
       body: Center(
         child: Padding(
           padding: const EdgeInsets.all(24.0),
@@ -52,16 +72,17 @@ class HomePage extends StatelessWidget {
               const Icon(
                 Icons.view_in_ar_rounded,
                 size: 80,
-                color: Color(0xFF0F8CFF),
+                color: _primaryColor,
               ),
               const SizedBox(height: 32),
               Text(
-                'Choose an AR Experience',
+                'Choose a Holo-interface',
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w600,
-                ),
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 1.1,
+                    ),
               ),
               const SizedBox(height: 48),
               _FeatureCard(
@@ -121,32 +142,38 @@ class _FeatureCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Card(
-      color: Colors.white.withValues(alpha: 0.05),
+      color: Colors.black.withValues(alpha: 0.25),
       elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-        side: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+      shape: BeveledRectangleBorder(
+        borderRadius: const BorderRadius.only(
+          topLeft: Radius.circular(16),
+          bottomRight: Radius.circular(16),
+        ),
+        side: BorderSide(color: _primaryColor.withValues(alpha: 0.4)),
       ),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
+        splashColor: _primaryColor.withValues(alpha: 0.2),
+        highlightColor: _primaryColor.withValues(alpha: 0.1),
         child: Padding(
-          padding: const EdgeInsets.all(24.0),
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
           child: Row(
             children: [
               Container(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Theme.of(
-                    context,
-                  ).colorScheme.primary.withValues(alpha: 0.15),
                   shape: BoxShape.circle,
+                  border: Border.all(color: _lightColor.withValues(alpha: 0.5)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: _primaryColor.withValues(alpha: 0.3),
+                      blurRadius: 8,
+                      spreadRadius: 2,
+                    ),
+                  ],
                 ),
-                child: Icon(
-                  icon,
-                  size: 32,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
+                child: Icon(icon, size: 28, color: _lightColor),
               ),
               const SizedBox(width: 20),
               Expanded(
@@ -156,22 +183,23 @@ class _FeatureCard extends StatelessWidget {
                     Text(
                       title,
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
-                      ),
+                            color: Colors.white,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 1.1,
+                          ),
                     ),
                     const SizedBox(height: 4),
                     Text(
                       subtitle,
-                      style: Theme.of(
-                        context,
-                      ).textTheme.bodyMedium?.copyWith(color: Colors.white70),
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            color: _lightColor.withValues(alpha: 0.8),
+                          ),
                     ),
                   ],
                 ),
               ),
               const SizedBox(width: 12),
-              const Icon(Icons.chevron_right_rounded, color: Colors.white54),
+              Icon(Icons.chevron_right_rounded, color: _primaryColor),
             ],
           ),
         ),
