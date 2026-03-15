@@ -17,7 +17,16 @@ class LangFlowService {
   final String appToken;
   final http.Client _client;
 
-  Uri _runUri() => Uri.parse('$baseUrl/lf/$flowId/api/v1/run');
+  List<Uri> _candidateRunUris() {
+    final normalizedBase = baseUrl.endsWith('/')
+        ? baseUrl.substring(0, baseUrl.length - 1)
+        : baseUrl;
+
+    return [
+      Uri.parse('$normalizedBase/lf/$flowId/api/v1/run'),
+      Uri.parse('$normalizedBase/api/v1/run/$flowId'),
+    ];
+  }
 
   Future<ResearchResult> fetchResearch(String topic) async {
     final trimmedTopic = topic.trim();
@@ -25,26 +34,43 @@ class LangFlowService {
       throw const FormatException('Please enter a topic before submitting.');
     }
 
-    final response = await _client.post(
-      _runUri(),
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer $appToken',
-      },
-      body: jsonEncode({
-        'input_value': trimmedTopic,
-        'input_type': 'chat',
-        'output_type': 'chat',
-      }),
-    );
+    final requestBody = {
+      'input_value': trimmedTopic,
+      'input_type': 'chat',
+      'output_type': 'chat',
+    };
 
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw Exception(
-        'LangFlow API failed (${response.statusCode}): ${response.body}',
+    final attemptErrors = <String>[];
+    http.Response? successfulResponse;
+
+    for (final uri in _candidateRunUris()) {
+      final response = await _client.post(
+        uri,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $appToken',
+          'x-api-key': appToken,
+        },
+        body: jsonEncode(requestBody),
+      );
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        successfulResponse = response;
+        break;
+      }
+
+      attemptErrors.add(
+        '${response.statusCode} at $uri: ${_summarizeServerError(response.body)}',
       );
     }
 
-    final decoded = jsonDecode(response.body);
+    if (successfulResponse == null) {
+      throw Exception(
+        'LangFlow API request failed. Attempts: ${attemptErrors.join(' | ')}',
+      );
+    }
+
+    final decoded = jsonDecode(successfulResponse.body);
     if (decoded is! Map<String, dynamic>) {
       throw const FormatException('Unexpected API response format from LangFlow.');
     }
@@ -61,7 +87,11 @@ class LangFlowService {
   }
 
   String _extractMessageText(Map<String, dynamic> data) {
-    final outputs = data['outputs'];
+    // Some hosted deployments wrap the payload in "data".
+    final payload =
+        (data['data'] is Map<String, dynamic>) ? data['data'] as Map<String, dynamic> : data;
+
+    final outputs = payload['outputs'];
     if (outputs is! List || outputs.isEmpty) {
       throw const FormatException('LangFlow output is missing outputs array.');
     }
@@ -97,6 +127,29 @@ class LangFlowService {
     }
 
     return text;
+  }
+
+  String _summarizeServerError(String body) {
+    final trimmedBody = body.trim();
+    if (trimmedBody.isEmpty) {
+      return 'empty response body';
+    }
+
+    try {
+      final decoded = jsonDecode(trimmedBody);
+      if (decoded is Map<String, dynamic>) {
+        final message = decoded['detail'] ?? decoded['message'] ?? decoded['error'];
+        if (message != null) {
+          return message.toString();
+        }
+      }
+    } catch (_) {
+      // Keep the plain response snippet below when JSON parsing fails.
+    }
+
+    return trimmedBody.length > 220
+        ? '${trimmedBody.substring(0, 220)}...'
+        : trimmedBody;
   }
 
   String _cleanMarkdownBackticks(String rawText) {

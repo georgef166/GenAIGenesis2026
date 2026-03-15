@@ -804,6 +804,16 @@ class _ARRocketPageState extends State<ARRocketPage>
                 ),
               ),
             ),
+          if (_rocketNode != null)
+            SafeArea(
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+                  child: _RocketFactRail(parts: kRocketParts.take(6).toList()),
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -841,6 +851,146 @@ class _ExplorePartsButton extends StatelessWidget {
           fontSize: 16,
           fontWeight: FontWeight.w600,
           letterSpacing: 1.1,
+        ),
+      ),
+    );
+  }
+}
+
+class _RocketFactRail extends StatelessWidget {
+  const _RocketFactRail({required this.parts});
+
+  final List<RocketPart> parts;
+
+  @override
+  Widget build(BuildContext context) {
+    final maxRailWidth = MediaQuery.sizeOf(context).width * 0.46;
+    final maxRailHeight = MediaQuery.sizeOf(context).height * 0.72;
+
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: math.min(340, maxRailWidth)),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.35),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Rocket Fact Cards',
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 8),
+              ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: maxRailHeight),
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (var index = 0; index < parts.length; index++)
+                        _RocketFactRailCard(
+                          factNumber: index + 1,
+                          part: parts[index],
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RocketFactRailCard extends StatelessWidget {
+  const _RocketFactRailCard({
+    required this.factNumber,
+    required this.part,
+  });
+
+  final int factNumber;
+  final RocketPart part;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.72),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _primaryColor.withValues(alpha: 0.42), width: 1.2),
+        boxShadow: [
+          BoxShadow(
+            color: _primaryColor.withValues(alpha: 0.2),
+            blurRadius: 10,
+            spreadRadius: 1,
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 24,
+                  height: 24,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: _lightColor,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: _primaryColor.withValues(alpha: 0.28),
+                        blurRadius: 6,
+                      ),
+                    ],
+                  ),
+                  child: Text(
+                    '$factNumber',
+                    style: const TextStyle(
+                      color: Colors.black,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '${part.emoji} ${part.name}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              part.shortDescription,
+              style: TextStyle(
+                color: _lightColor.withValues(alpha: 0.92),
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                height: 1.28,
+              ),
+            ),
+          ],
         ),
       ),
     );
