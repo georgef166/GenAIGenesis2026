@@ -28,7 +28,6 @@ class GenaiApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(
           seedColor: _primaryColor,
           brightness: Brightness.dark,
-          background: _backgroundColor,
         ),
         useMaterial3: true,
         scaffoldBackgroundColor: _backgroundColor,
@@ -143,20 +142,20 @@ class _FeatureCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Card(
-      color: Colors.black.withOpacity(0.25),
+      color: Colors.black.withValues(alpha: 0.25),
       elevation: 0,
       shape: BeveledRectangleBorder(
         borderRadius: const BorderRadius.only(
           topLeft: Radius.circular(16),
           bottomRight: Radius.circular(16),
         ),
-        side: BorderSide(color: _primaryColor.withOpacity(0.4)),
+        side: BorderSide(color: _primaryColor.withValues(alpha: 0.4)),
       ),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
-        splashColor: _primaryColor.withOpacity(0.2),
-        highlightColor: _primaryColor.withOpacity(0.1),
+        splashColor: _primaryColor.withValues(alpha: 0.2),
+        highlightColor: _primaryColor.withValues(alpha: 0.1),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
           child: Row(
@@ -165,10 +164,10 @@ class _FeatureCard extends StatelessWidget {
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  border: Border.all(color: _lightColor.withOpacity(0.5)),
+                  border: Border.all(color: _lightColor.withValues(alpha: 0.5)),
                   boxShadow: [
                     BoxShadow(
-                      color: _primaryColor.withOpacity(0.3),
+                      color: _primaryColor.withValues(alpha: 0.3),
                       blurRadius: 8,
                       spreadRadius: 2,
                     ),
@@ -193,7 +192,7 @@ class _FeatureCard extends StatelessWidget {
                     Text(
                       subtitle,
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                            color: _lightColor.withOpacity(0.8),
+                            color: _lightColor.withValues(alpha: 0.8),
                           ),
                     ),
                   ],

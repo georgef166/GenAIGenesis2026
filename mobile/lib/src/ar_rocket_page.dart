@@ -872,7 +872,7 @@ class RocketPartsSheet extends StatelessWidget {
           decoration: BoxDecoration(
             color: const Color(0xFF060e15),
             border: Border(
-              top: BorderSide(color: _primaryColor.withOpacity(0.4), width: 2),
+              top: BorderSide(color: _primaryColor.withValues(alpha: 0.4), width: 2),
             ),
           ),
           child: Column(
@@ -888,7 +888,7 @@ class RocketPartsSheet extends StatelessWidget {
                       color: _primaryColor,
                       shadows: [
                         BoxShadow(
-                          color: _primaryColor.withOpacity(0.5),
+                          color: _primaryColor.withValues(alpha: 0.5),
                           blurRadius: 8,
                         ),
                       ],
@@ -950,12 +950,12 @@ class _PartListTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return InkWell(
       onTap: onTap,
-      splashColor: _primaryColor.withOpacity(0.2),
-      highlightColor: _primaryColor.withOpacity(0.1),
+      splashColor: _primaryColor.withValues(alpha: 0.2),
+      highlightColor: _primaryColor.withValues(alpha: 0.1),
       child: Ink(
         decoration: BoxDecoration(
           border: Border(
-            left: BorderSide(color: _primaryColor.withOpacity(0.5), width: 2),
+            left: BorderSide(color: _primaryColor.withValues(alpha: 0.5), width: 2),
           ),
         ),
         child: Padding(
@@ -981,7 +981,7 @@ class _PartListTile extends StatelessWidget {
                     Text(
                       part.shortDescription,
                       style: TextStyle(
-                        color: _lightColor.withOpacity(0.8),
+                        color: _lightColor.withValues(alpha: 0.8),
                         fontSize: 13,
                       ),
                     ),
@@ -1019,7 +1019,7 @@ class PartDetailSheet extends StatelessWidget {
           decoration: BoxDecoration(
             color: const Color(0xFF060e15),
             border: Border(
-              top: BorderSide(color: _primaryColor.withOpacity(0.4), width: 2),
+              top: BorderSide(color: _primaryColor.withValues(alpha: 0.4), width: 2),
             ),
           ),
           child: Column(
@@ -1075,7 +1075,7 @@ class PartDetailSheet extends StatelessWidget {
                   child: Text(
                     part.details,
                     style: TextStyle(
-                      color: _lightColor.withOpacity(0.9),
+                      color: _lightColor.withValues(alpha: 0.9),
                       fontSize: 15,
                       height: 1.65,
                     ),
@@ -1135,8 +1135,8 @@ class ARStatusOverlay extends StatelessWidget {
 
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: _backgroundColor.withOpacity(0.8),
-        border: Border.all(color: _primaryColor.withOpacity(0.5)),
+        color: _backgroundColor.withValues(alpha: 0.8),
+        border: Border.all(color: _primaryColor.withValues(alpha: 0.5)),
         borderRadius: const BorderRadius.only(
           topLeft: Radius.circular(24),
           bottomRight: Radius.circular(24),
@@ -1155,7 +1155,7 @@ class ARStatusOverlay extends StatelessWidget {
                   color: _primaryColor,
                   shadows: [
                     BoxShadow(
-                      color: _primaryColor.withOpacity(0.5),
+                      color: _primaryColor.withValues(alpha: 0.5),
                       blurRadius: 8,
                     ),
                   ],
@@ -1335,8 +1335,8 @@ class _OverlayChip extends StatelessWidget {
   Widget build(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: _primaryColor.withOpacity(0.1),
-        border: Border.all(color: _primaryColor.withOpacity(0.4)),
+        color: _primaryColor.withValues(alpha: 0.1),
+        border: Border.all(color: _primaryColor.withValues(alpha: 0.4)),
         borderRadius: BorderRadius.circular(999),
       ),
       child: Padding(

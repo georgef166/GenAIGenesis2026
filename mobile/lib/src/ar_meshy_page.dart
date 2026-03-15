@@ -18,8 +18,6 @@ import 'package:vector_math/vector_math_64.dart' hide Colors;
 import 'meshy_proxy_client.dart';
 
 const _backgroundColor = Color(0xFF02040a);
-const _primaryColor = Color(0xFF00ffff);
-const _lightColor = Color(0xFF80ffde);
 
 const _jobPollInterval = Duration(seconds: 3);
 const _generatedModelScale = 0.14;
