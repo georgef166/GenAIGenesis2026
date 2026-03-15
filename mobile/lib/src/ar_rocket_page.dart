@@ -53,10 +53,11 @@ enum ARPlacementState {
 
 enum LaunchPhase { idle, lifting, gone }
 
-const _kLaunchAscendDistance = 12.0;
 const _kCloudLayerHeight = 1.4;
 const _kIdleBeforeCountdownSeconds = 1.0;
-const _kLaunchDurationSeconds = 14.0;
+const _kAscentInitialSpeedMps = 0.9;
+const _kAscentCruiseSpeedMps = 2.6;
+const _kAscentRampSeconds = 3.5;
 const _kPlumeHiddenY = -10.0;
 const _kEngineBaseY = -0.24;
 const _kEngineClusterRadius = 0.11;
@@ -559,11 +560,11 @@ class _ARRocketPageState extends State<ARRocketPage>
     }
 
     if (_launchPhase == LaunchPhase.lifting) {
-      final t = ((_launchElapsed - _liftoffElapsed) /
-              _kLaunchDurationSeconds)
-          .clamp(0.0, 1.0);
-      final eased = _easeInOutCubic(t);
-      _launchOffset = eased * _kLaunchAscendDistance;
+      final liftElapsed = _launchElapsed - _liftoffElapsed;
+      final rampT = (liftElapsed / _kAscentRampSeconds).clamp(0.0, 1.0);
+      final speed = _kAscentInitialSpeedMps +
+          (_kAscentCruiseSpeedMps - _kAscentInitialSpeedMps) * rampT;
+      _launchOffset += speed * dt;
 
       final rn = _rocketNode;
       if (rn != null) {
@@ -575,16 +576,6 @@ class _ARRocketPageState extends State<ARRocketPage>
 
       if (!_cloudVisible && _launchOffset >= _kCloudLayerHeight * 0.6) {
         _showCloudLayer();
-      }
-
-      if (t >= 1.0) {
-        setState(() {
-          _launchPhase = LaunchPhase.gone;
-          _message = '🌤 Saturn V has exited the sky view!';
-        });
-        _hideFlames();
-        unawaited(_fadeOutAndStopEngineAudio());
-        _launchTimer?.cancel();
       }
     }
   }
@@ -606,12 +597,6 @@ class _ARRocketPageState extends State<ARRocketPage>
       _showFlames();
       unawaited(_startEngineAudio());
     }
-  }
-
-  static double _easeInOutCubic(double t) {
-    return t < 0.5
-        ? 4 * t * t * t
-        : 1 - math.pow(-2 * t + 2, 3) / 2;
   }
 
   Future<void> _addCloudLayer(ARPlaneAnchor anchor) async {
@@ -677,18 +662,6 @@ class _ARRocketPageState extends State<ARRocketPage>
     _updateFlameTransforms(_launchOffset);
   }
 
-  void _hideFlames() {
-    _flamesVisible = false;
-    final count = math.min(_flameNodes.length, _engineOffsets.length);
-    for (var i = 0; i < count; i++) {
-      _flameNodes[i].position = Vector3(
-        _engineOffsets[i].x,
-        _kPlumeHiddenY,
-        _engineOffsets[i].z,
-      );
-    }
-  }
-
   Future<void> _playCountdownAudio() async {
     await _countdownPlayer.stop();
     _countdownCompleted = false;
@@ -706,21 +679,6 @@ class _ARRocketPageState extends State<ARRocketPage>
       AssetSource('audio/rocket_engine_loop.wav'),
       volume: _engineBaseVolume,
     );
-  }
-
-  Future<void> _fadeOutAndStopEngineAudio() async {
-    const steps = 10;
-    const total = Duration(milliseconds: 900);
-    final stepMs = total.inMilliseconds ~/ steps;
-
-    for (var i = steps; i >= 1; i--) {
-      final vol = _engineBaseVolume * (i / steps);
-      await _enginePlayer.setVolume(vol);
-      await Future<void>.delayed(Duration(milliseconds: stepMs));
-    }
-
-    await _enginePlayer.stop();
-    await _enginePlayer.setVolume(_engineBaseVolume);
   }
 
   void _showCloudLayer() {
