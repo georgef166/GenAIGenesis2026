@@ -72,13 +72,10 @@ class _PlumeNodeRef {
 const _kLaunchAscendDistance = 2.0;
 const _kCloudLayerHeight = 1.4;
 const _kIdleBeforeCountdownSeconds = 1.0;
-const _kCountdownSeconds = 3.0;
-const _kLiftoffAtSeconds =
-  _kIdleBeforeCountdownSeconds + _kCountdownSeconds;
 const _kLaunchDurationSeconds = 6.0;
 const _kPlumeHiddenY = -10.0;
-const _kEngineBaseY = -0.16;
-const _kEngineClusterRadius = 0.055;
+const _kEngineBaseY = -0.24;
+const _kEngineClusterRadius = 0.11;
 
 // ---------------------------------------------------------------------------
 // Main AR page
@@ -112,8 +109,11 @@ class _ARRocketPageState extends State<ARRocketPage>
   Timer? _launchTimer;
   LaunchPhase _launchPhase = LaunchPhase.idle;
   double _launchElapsed = 0.0;
+  double _liftoffElapsed = 0.0;
   double _launchOffset = 0.0;
   bool _countdownPlayed = false;
+  bool _countdownCompleted = false;
+  bool _liftoffTriggered = false;
   bool _engineStarted = false;
   ARNode? _cloudNode;
   bool _cloudVisible = false;
@@ -130,6 +130,7 @@ class _ARRocketPageState extends State<ARRocketPage>
 
   final AudioPlayer _countdownPlayer = AudioPlayer();
   final AudioPlayer _enginePlayer = AudioPlayer();
+  StreamSubscription<void>? _countdownCompleteSub;
   static const _engineBaseVolume = 0.88;
 
   Vector3 get _rocketScale =>
@@ -145,6 +146,10 @@ class _ARRocketPageState extends State<ARRocketPage>
     WidgetsBinding.instance.addObserver(this);
     _enginePlayer.setReleaseMode(ReleaseMode.loop);
     _enginePlayer.setVolume(_engineBaseVolume);
+    _countdownCompleteSub = _countdownPlayer.onPlayerComplete.listen((_) {
+      _countdownCompleted = true;
+      _triggerLiftoffIfReady();
+    });
     _ensureCameraPermission();
   }
 
@@ -512,8 +517,11 @@ class _ARRocketPageState extends State<ARRocketPage>
       _plumesVisible = false;
       _launchPhase = LaunchPhase.idle;
       _launchElapsed = 0.0;
+      _liftoffElapsed = 0.0;
       _launchOffset = 0.0;
       _countdownPlayed = false;
+      _countdownCompleted = false;
+      _liftoffTriggered = false;
       _engineStarted = false;
       if (_hasHorizontalPlane) {
         _state = ARPlacementState.readyToPlace;
@@ -534,8 +542,11 @@ class _ARRocketPageState extends State<ARRocketPage>
     setState(() {
       _launchPhase = LaunchPhase.idle;
       _launchElapsed = 0.0;
+      _liftoffElapsed = 0.0;
       _launchOffset = 0.0;
       _countdownPlayed = false;
+      _countdownCompleted = false;
+      _liftoffTriggered = false;
       _engineStarted = false;
       _message = 'Rocket placed! Countdown starts in 1 second…';
     });
@@ -559,22 +570,12 @@ class _ARRocketPageState extends State<ARRocketPage>
     }
 
     if (_launchPhase == LaunchPhase.idle) {
-      if (_launchElapsed >= _kLiftoffAtSeconds) {
-        setState(() {
-          _launchPhase = LaunchPhase.lifting;
-          _message = '🚀 Liftoff! Saturn V is launching!';
-        });
-        if (!_engineStarted) {
-          _engineStarted = true;
-          _showPlumes();
-          unawaited(_startEngineAudio());
-        }
-      }
+      _triggerLiftoffIfReady();
       return;
     }
 
     if (_launchPhase == LaunchPhase.lifting) {
-      final t = ((_launchElapsed - _kLiftoffAtSeconds) /
+      final t = ((_launchElapsed - _liftoffElapsed) /
               _kLaunchDurationSeconds)
           .clamp(0.0, 1.0);
       final eased = _easeInOutCubic(t);
@@ -601,6 +602,25 @@ class _ARRocketPageState extends State<ARRocketPage>
         unawaited(_fadeOutAndStopEngineAudio());
         _launchTimer?.cancel();
       }
+    }
+  }
+
+  void _triggerLiftoffIfReady() {
+    if (!mounted || _liftoffTriggered) return;
+    if (!_countdownPlayed || !_countdownCompleted) return;
+
+    _liftoffTriggered = true;
+    _liftoffElapsed = _launchElapsed;
+
+    setState(() {
+      _launchPhase = LaunchPhase.lifting;
+      _message = '🚀 Liftoff! Saturn V is launching!';
+    });
+
+    if (!_engineStarted) {
+      _engineStarted = true;
+      _showPlumes();
+      unawaited(_startEngineAudio());
     }
   }
 
@@ -667,7 +687,7 @@ class _ARRocketPageState extends State<ARRocketPage>
     double rocketOffsetY,
     _PlumeLayer layer,
   ) {
-    final smokeDrop = layer == _PlumeLayer.smoke ? -0.07 : 0.0;
+    final smokeDrop = layer == _PlumeLayer.smoke ? -0.20 : 0.0;
     return Vector3(
       engineOffset.x,
       _kEngineBaseY + rocketOffsetY + smokeDrop,
@@ -679,21 +699,21 @@ class _ARRocketPageState extends State<ARRocketPage>
     switch (layer) {
       case _PlumeLayer.inner:
         return Vector3(
-          0.10 * _iosPluginModelScaleCompensation,
-          0.34 * _iosPluginModelScaleCompensation,
-          0.10 * _iosPluginModelScaleCompensation,
+          0.16 * _iosPluginModelScaleCompensation,
+          0.54 * _iosPluginModelScaleCompensation,
+          0.16 * _iosPluginModelScaleCompensation,
         );
       case _PlumeLayer.outer:
         return Vector3(
-          0.17 * _iosPluginModelScaleCompensation,
-          0.46 * _iosPluginModelScaleCompensation,
-          0.17 * _iosPluginModelScaleCompensation,
+          0.30 * _iosPluginModelScaleCompensation,
+          0.84 * _iosPluginModelScaleCompensation,
+          0.30 * _iosPluginModelScaleCompensation,
         );
       case _PlumeLayer.smoke:
         return Vector3(
-          0.24 * _iosPluginModelScaleCompensation,
-          0.62 * _iosPluginModelScaleCompensation,
-          0.24 * _iosPluginModelScaleCompensation,
+          0.44 * _iosPluginModelScaleCompensation,
+          1.24 * _iosPluginModelScaleCompensation,
+          0.44 * _iosPluginModelScaleCompensation,
         );
     }
   }
@@ -742,6 +762,7 @@ class _ARRocketPageState extends State<ARRocketPage>
 
   Future<void> _playCountdownAudio() async {
     await _countdownPlayer.stop();
+    _countdownCompleted = false;
     await _countdownPlayer.play(
       AssetSource('audio/countdown_liftoff.aiff'),
       volume: 1.0,
@@ -812,6 +833,7 @@ class _ARRocketPageState extends State<ARRocketPage>
   @override
   void dispose() {
     _launchTimer?.cancel();
+    _countdownCompleteSub?.cancel();
     unawaited(_countdownPlayer.dispose());
     unawaited(_enginePlayer.dispose());
     WidgetsBinding.instance.removeObserver(this);
