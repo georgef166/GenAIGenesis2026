@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'src/ar_meshy_page.dart';
 import 'src/ar_rocket_page.dart';
 import 'src/ar_diagram_page.dart';
+import 'screens/research_screen.dart';
 
 // ---------------------------------------------------------------------------
 // Main entry point & App root
@@ -115,6 +116,17 @@ class HomePage extends StatelessWidget {
                 onTap: () {
                   Navigator.of(context).push(
                     MaterialPageRoute(builder: (_) => const ARDiagramPage()),
+                  );
+                },
+              ),
+              const SizedBox(height: 16),
+              _FeatureCard(
+                title: 'AI Topic Research',
+                subtitle: 'Create kid-friendly fun facts from a single topic',
+                icon: Icons.menu_book_rounded,
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const ResearchScreen()),
                   );
                 },
               ),
