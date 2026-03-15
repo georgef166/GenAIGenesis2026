@@ -1,4 +1,4 @@
-# genai
+# Voxel
 
 This repo contains two pieces:
 
@@ -25,7 +25,7 @@ line tools, and emulator packages.
 Allow the repo shell once:
 
 ```bash
-cd /home/yvesd/Codebases/genai
+cd /home/yvesd/Codebases/voxel
 direnv allow
 ```
 
@@ -45,14 +45,14 @@ direnv allow
 Install the backend dependencies:
 
 ```bash
-cd /home/yvesd/Codebases/genai/server
+cd /home/yvesd/Codebases/voxel/server
 dart pub get
 ```
 
 Start the proxy:
 
 ```bash
-cd /home/yvesd/Codebases/genai/server
+cd /home/yvesd/Codebases/voxel/server
 dart run bin/server.dart
 ```
 
@@ -71,14 +71,14 @@ It keeps jobs in memory only.
 Install the Flutter dependencies:
 
 ```bash
-cd /home/yvesd/Codebases/genai/mobile
+cd /home/yvesd/Codebases/voxel/mobile
 flutter pub get
 ```
 
 Run the app on a physical device, pointing it at the proxy on your computer:
 
 ```bash
-cd /home/yvesd/Codebases/genai/mobile
+cd /home/yvesd/Codebases/voxel/mobile
 flutter run --dart-define=MESHY_PROXY_BASE_URL=http://<LAN-IP>:8080
 ```
 
@@ -112,7 +112,7 @@ across restarts.
 Build a debug APK:
 
 ```bash
-cd /home/yvesd/Codebases/genai/mobile
+cd /home/yvesd/Codebases/voxel/mobile
 flutter build apk --debug
 ```
 
@@ -121,14 +121,14 @@ flutter build apk --debug
 Backend:
 
 ```bash
-cd /home/yvesd/Codebases/genai/server
+cd /home/yvesd/Codebases/voxel/server
 dart test
 ```
 
 Flutter app:
 
 ```bash
-cd /home/yvesd/Codebases/genai/mobile
+cd /home/yvesd/Codebases/voxel/mobile
 flutter analyze
 flutter test
 flutter build apk --debug

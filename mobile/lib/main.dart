@@ -28,7 +28,7 @@ class GenaiApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'GenAI AR',
+      title: 'Voxel',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
@@ -125,14 +125,29 @@ class HomePage extends StatelessWidget {
               ),
             ),
             Align(
-              child: Text(
-                'GENAI AR EXPERIENCES',
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.displaySmall?.copyWith(
-                  color: _primaryColor.withValues(alpha: 0.96),
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 1.8,
-                ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Voxel',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.displayMedium?.copyWith(
+                      color: _primaryColor.withValues(alpha: 0.96),
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'GenAI AR Learning',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      color: _lightColor.withValues(alpha: 0.92),
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.8,
+                    ),
+                  ),
+                ],
               ),
             ),
           ],

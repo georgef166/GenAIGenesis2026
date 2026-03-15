@@ -1,5 +1,5 @@
 name: genai
-description: "AR Rocket Explorer — place a 3-D rocket on any flat surface and learn about each part."
+description: "Voxel — GenAI AR Learning experiences in an interactive AR app."
 publish_to: 'none'
 
 version: 1.0.0+1

@@ -1,5 +1,5 @@
 name: genai_server
-description: Local Meshy proxy for the genai Flutter AR app.
+description: Local Meshy proxy for the Voxel Flutter AR app.
 publish_to: none
 
 environment:
