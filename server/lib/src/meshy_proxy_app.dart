@@ -10,13 +10,20 @@ class MeshyProxyApp {
     required MeshyApi meshyApi,
     Duration? pollInterval,
     Duration? stageTimeout,
+    Duration? jobRetention,
   }) : _meshyApi = meshyApi,
        _pollInterval = pollInterval ?? const Duration(seconds: 5),
-       _stageTimeout = stageTimeout ?? const Duration(minutes: 12);
+       _stageTimeout = stageTimeout ?? const Duration(minutes: 12),
+       _jobRetention = jobRetention ?? const Duration(minutes: 30);
+
+  /// Upper bound on an accepted prompt, to keep a hostile caller from parking
+  /// megabytes of text in the in-memory job map.
+  static const _maxPromptLength = 1000;
 
   final MeshyApi _meshyApi;
   final Duration _pollInterval;
   final Duration _stageTimeout;
+  final Duration _jobRetention;
   final Map<String, MeshyJob> _jobs = <String, MeshyJob>{};
   final Map<String, Future<void>> _runningJobs = <String, Future<void>>{};
   final Random _random = Random.secure();
@@ -71,6 +78,15 @@ class MeshyProxyApp {
       return _jsonResponse(HttpStatus.badRequest, <String, Object?>{
         'error': 'Invalid JSON body: ${error.message}',
       });
+    } catch (error, stackTrace) {
+      // Reading or decoding the body can fail in ways beyond FormatException
+      // (a truncated request, a stack overflow on deeply nested JSON). Those
+      // are still the caller's fault, not a 500.
+      stderr.writeln('[meshy] rejected malformed request body: $error');
+      stderr.writeln(stackTrace);
+      return _jsonResponse(HttpStatus.badRequest, <String, Object?>{
+        'error': 'The request body could not be read as JSON.',
+      });
     }
 
     final prompt = (payload['prompt'] as String?)?.trim() ?? '';
@@ -79,6 +95,15 @@ class MeshyProxyApp {
         'error': 'The "prompt" field must be a non-empty string.',
       });
     }
+
+    if (prompt.length > _maxPromptLength) {
+      return _jsonResponse(HttpStatus.badRequest, <String, Object?>{
+        'error':
+            'The "prompt" field must be at most $_maxPromptLength characters.',
+      });
+    }
+
+    _evictStaleJobs();
 
     final jobId = _nextJobId();
     final now = DateTime.now().toUtc();
@@ -175,7 +200,11 @@ class MeshyProxyApp {
             completedPreviewTask.thumbnailUrl,
         error: null,
       );
-    } catch (error) {
+    } catch (error, stackTrace) {
+      // The client only ever sees the normalized message, so this is the one
+      // place the real failure is recoverable. Never drop the stack trace.
+      stderr.writeln('[meshy] job=$jobId failed: $error');
+      stderr.writeln(stackTrace);
       _updateJob(
         jobId,
         status: MeshyJobStatus.error,
@@ -281,6 +310,17 @@ class MeshyProxyApp {
     );
   }
 
+  /// Drops finished jobs the client has had ample time to read back, so a long
+  /// running server does not accumulate them for its whole lifetime.
+  void _evictStaleJobs() {
+    final cutoff = DateTime.now().toUtc().subtract(_jobRetention);
+    _jobs.removeWhere((jobId, job) {
+      return job.isTerminal &&
+          !_runningJobs.containsKey(jobId) &&
+          job.updatedAt.isBefore(cutoff);
+    });
+  }
+
   String _nextJobId() {
     final timestamp = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
     final entropy = _random.nextInt(1 << 32).toRadixString(36).padLeft(7, '0');
@@ -294,7 +334,11 @@ class MeshyProxyApp {
     if (error is MeshyTaskException) {
       return error.message;
     }
-    return error.toString();
+
+    // Anything else (SocketException, HandshakeException, ...) can carry
+    // internal host and path detail, so it is logged rather than returned.
+    return 'The proxy could not complete the Meshy request. '
+        'Check the server logs for details.';
   }
 
   bool _hasMeaningfulJobChange(MeshyJob current, MeshyJob next) {
@@ -373,6 +417,9 @@ class MeshyJob {
   final String? meshyError;
   final String? thumbnailUrl;
   final String? error;
+
+  bool get isTerminal =>
+      status == MeshyJobStatus.completed || status == MeshyJobStatus.error;
 
   MeshyJob copyWith({
     MeshyJobStatus? status,
@@ -462,6 +509,9 @@ class MeshyHttpApi implements MeshyApi {
   final String _apiKey;
   final HttpClient _httpClient;
   final Uri _baseUri;
+
+  /// Releases the connection pool held open against api.meshy.ai.
+  void close() => _httpClient.close(force: true);
 
   @override
   Future<MeshyCreatedTask> createPreviewTask(String prompt) async {

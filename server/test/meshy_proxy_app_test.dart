@@ -24,6 +24,69 @@ void main() {
       expect(body['error'], contains('non-empty string'));
     });
 
+    test('rejects an over-long prompt', () async {
+      final app = MeshyProxyApp(meshyApi: _FakeMeshyApi());
+
+      final response = await app.handler(
+        Request(
+          'POST',
+          Uri.parse('http://localhost/api/meshy/generate'),
+          body: jsonEncode(<String, Object?>{'prompt': 'a' * 1001}),
+        ),
+      );
+
+      expect(response.statusCode, 400);
+      final body =
+          jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(body['error'], contains('at most 1000 characters'));
+    });
+
+    test('evicts finished jobs once they age past the retention window',
+        () async {
+      final app = MeshyProxyApp(
+        meshyApi: _FakeMeshyApi(),
+        pollInterval: Duration.zero,
+        jobRetention: Duration.zero,
+      );
+
+      Future<String> submit() async {
+        final response = await app.handler(
+          Request(
+            'POST',
+            Uri.parse('http://localhost/api/meshy/generate'),
+            body: jsonEncode(<String, Object?>{'prompt': 'a stone fox statue'}),
+          ),
+        );
+        final body =
+            jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+        return body['jobId'] as String;
+      }
+
+      final firstJobId = await submit();
+      await app.waitForJob(firstJobId);
+
+      // The first job is complete and past retention, so submitting a second
+      // job should sweep it out of the in-memory map.
+      final secondJobId = await submit();
+      await app.waitForJob(secondJobId);
+
+      final staleResponse = await app.handler(
+        Request(
+          'GET',
+          Uri.parse('http://localhost/api/meshy/generate/$firstJobId'),
+        ),
+      );
+      expect(staleResponse.statusCode, 404);
+
+      final liveResponse = await app.handler(
+        Request(
+          'GET',
+          Uri.parse('http://localhost/api/meshy/generate/$secondJobId'),
+        ),
+      );
+      expect(liveResponse.statusCode, 200);
+    });
+
     test('runs preview and refine tasks to completion', () async {
       final app = MeshyProxyApp(
         meshyApi: _FakeMeshyApi(),

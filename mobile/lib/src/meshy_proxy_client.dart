@@ -1,6 +1,12 @@
 import 'dart:convert';
 import 'dart:io';
 
+/// Used when `MESHY_PROXY_BASE_URL` is not supplied via `--dart-define`.
+///
+/// This only resolves for emulator/desktop runs. A physical device must pass
+/// the dev machine's LAN address explicitly.
+const defaultProxyBaseUrl = 'http://localhost:8080';
+
 class MeshyProxyConfiguration {
   const MeshyProxyConfiguration._({required this.client, required this.error});
 
@@ -16,7 +22,7 @@ class MeshyProxyConfiguration {
     final trimmed = rawValue?.trim() ?? '';
     if (trimmed.isEmpty) {
       return MeshyProxyConfiguration._(
-        client: MeshyProxyClient(baseUri: Uri.parse('http://nixos:8080')),
+        client: MeshyProxyClient(baseUri: Uri.parse(defaultProxyBaseUrl)),
         error: null,
       );
     }
@@ -32,7 +38,7 @@ class MeshyProxyConfiguration {
         client: null,
         error:
             'MESHY_PROXY_BASE_URL must be an absolute http(s) URL such as '
-            'http://nixos:8080.',
+            '$defaultProxyBaseUrl.',
       );
     }
 
@@ -52,6 +58,9 @@ class MeshyProxyClient {
   final HttpClient _httpClient;
 
   Uri get baseUri => _baseUri;
+
+  /// Releases the underlying connection pool. Safe to call more than once.
+  void close() => _httpClient.close(force: true);
 
   Future<MeshyGenerationJob> createJob(String prompt) async {
     final response = await _sendJsonRequest(
@@ -123,7 +132,19 @@ class MeshyProxyClient {
   }
 }
 
-enum MeshyJobStatus { submitting, previewing, refining, completed, error }
+enum MeshyJobStatus {
+  submitting,
+  previewing,
+  refining,
+  completed,
+  error,
+
+  /// A status this build of the app does not recognise.
+  ///
+  /// Treated as non-terminal so a newer server that adds an intermediate stage
+  /// does not break older clients; the poll loop's deadline bounds the wait.
+  unknown,
+}
 
 class MeshyGenerationJob {
   const MeshyGenerationJob({
@@ -173,7 +194,7 @@ class MeshyGenerationJob {
       );
     }
 
-    final status = MeshyJobStatus.values.byName(statusName);
+    final status = _parseStatus(statusName);
     return MeshyGenerationJob(
       jobId: jobId,
       status: status,
@@ -191,6 +212,16 @@ class MeshyGenerationJob {
       createdAt: _tryParseDateTime(json['createdAt']),
       updatedAt: _tryParseDateTime(json['updatedAt']),
     );
+  }
+
+  static MeshyJobStatus _parseStatus(String name) {
+    for (final status in MeshyJobStatus.values) {
+      if (status.name == name) {
+        return status;
+      }
+    }
+
+    return MeshyJobStatus.unknown;
   }
 
   static DateTime? _tryParseDateTime(Object? value) {

@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">nixos</domain>
-    </domain-config>
+    <!--
+      DEV ONLY. The Meshy proxy runs on the developer's machine and is reached
+      over plain HTTP, either at localhost (emulator) or at an arbitrary LAN
+      address (physical device), so the allowance cannot be pinned to a fixed
+      domain. Remove this before shipping a release build.
+    -->
+    <base-config cleartextTrafficPermitted="true" />
 </network-security-config>

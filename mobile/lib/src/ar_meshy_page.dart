@@ -20,6 +20,13 @@ import 'meshy_proxy_client.dart';
 const _backgroundColor = Color(0xFF02040a);
 
 const _jobPollInterval = Duration(seconds: 3);
+
+/// Upper bound on a single generation. The proxy allows 12 minutes per Meshy
+/// stage, so this leaves headroom without letting a wedged job poll forever.
+const _jobPollDeadline = Duration(minutes: 15);
+
+/// Consecutive poll failures tolerated before the generation is abandoned.
+const _jobPollMaxConsecutiveFailures = 3;
 const _generatedModelScale = 0.14;
 
 enum ARSessionState {
@@ -253,7 +260,7 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
       case MeshyGenerationStage.error:
         return _generationErrorMessage ?? 'Meshy generation failed.';
       case MeshyGenerationStage.idle:
-        return 'Run the proxy on your computer at http://nixos:8080. '
+        return 'Run the proxy on your computer at $defaultProxyBaseUrl. '
             'Use --dart-define=MESHY_PROXY_BASE_URL=http://<LAN-IP>:8080 '
             'to override it.';
     }
@@ -603,12 +610,27 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
       return;
     }
 
+    final deadline = DateTime.now().add(_jobPollDeadline);
+    var consecutiveFailures = 0;
+
     while (_isCurrentGeneration(generationToken)) {
+      if (DateTime.now().isAfter(deadline)) {
+        _setGenerationError(
+          generationToken,
+          'Meshy did not finish within '
+          '${_jobPollDeadline.inMinutes} minutes. Try again with a simpler '
+          'prompt.',
+        );
+        return;
+      }
+
       try {
         final job = await client.getJob(jobId);
         if (!_isCurrentGeneration(generationToken)) {
           return;
         }
+
+        consecutiveFailures = 0;
 
         setState(() {
           _currentJob = job;
@@ -646,8 +668,16 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
           _generationErrorMessage = null;
         });
       } catch (error) {
-        _setGenerationError(generationToken, _normalizeGenerationError(error));
-        return;
+        // A dropped Wi-Fi packet should not abandon a job the server is still
+        // working on, so ride out a few consecutive failures before giving up.
+        consecutiveFailures += 1;
+        if (consecutiveFailures > _jobPollMaxConsecutiveFailures) {
+          _setGenerationError(
+            generationToken,
+            _normalizeGenerationError(error),
+          );
+          return;
+        }
       }
 
       await Future<void>.delayed(_jobPollInterval);
@@ -775,6 +805,10 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
         return MeshyGenerationStage.ready;
       case MeshyJobStatus.error:
         return MeshyGenerationStage.error;
+      case MeshyJobStatus.unknown:
+        // Keep showing the last known stage's spinner rather than inventing a
+        // state; the poll loop keeps going until it completes or times out.
+        return MeshyGenerationStage.refining;
     }
   }
 
@@ -861,6 +895,7 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
       ..dispose();
     WidgetsBinding.instance.removeObserver(this);
     _sessionManager?.dispose();
+    _meshyClient?.close();
     super.dispose();
   }
 

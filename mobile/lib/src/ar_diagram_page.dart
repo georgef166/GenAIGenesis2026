@@ -13,7 +13,10 @@ import 'package:ar_flutter_plugin_2/managers/ar_session_manager.dart';
 import 'package:ar_flutter_plugin_2/models/ar_anchor.dart';
 import 'package:ar_flutter_plugin_2/models/ar_hittest_result.dart';
 import 'package:ar_flutter_plugin_2/models/ar_node.dart';
+import 'package:ar_flutter_plugin_2/models/hand_gesture_frame.dart';
 import 'package:flutter/material.dart';
+import 'package:genai/src/gesture_transform_math.dart';
+import 'package:genai/src/hand_gesture_interpreter.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:vector_math/vector_math_64.dart' hide Colors;
 
@@ -232,6 +235,31 @@ class _ARDiagramPageState extends State<ARDiagramPage>
   final List<ARNode> _flashcardNodes = <ARNode>[];
   final List<ARNode> _pointerLineNodes = <ARNode>[];
 
+  // Billboard rotation of each flashcard (parallel to _flashcardNodes).
+  final List<Quaternion> _cardRotations = <Quaternion>[];
+
+  // Precomputed pointer-line geometry (parallel to _pointerLineNodes).
+  final List<_PointerLineGeometry> _lineGeometries = <_PointerLineGeometry>[];
+
+  // Hand gesture controls
+  bool _gestureModeEnabled = false;
+  bool _gestureHintVisible = false;
+  Timer? _gestureHintTimer;
+  HandGestureInterpreter? _gestureInterpreter;
+  final ValueNotifier<_HandOverlayModel> _handOverlay =
+      ValueNotifier(const _HandOverlayModel(hands: [], zooming: false));
+
+  // Diagram transform driven by gestures (anchor-local).
+  Vector3 _diagramOffset = Vector3.zero();
+  double _diagramScale = 1.0;
+  double _zoomScaleAtStart = 1.0;
+  static const double _minDiagramScale = 0.2;
+  static const double _maxDiagramScale = 5.0;
+
+  // Poses cached from the billboard polling timer, reused by drag math.
+  Matrix4? _lastCameraPose;
+  Matrix4? _lastAnchorPose;
+
   // -------------------------------------------------------------------
   // Scale helpers
   // -------------------------------------------------------------------
@@ -265,14 +293,21 @@ class _ARDiagramPageState extends State<ARDiagramPage>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _ensureCameraPermission(requestIfNeeded: false);
+    } else if (state == AppLifecycleState.paused) {
+      _disableGestureMode();
     }
   }
 
   @override
   void dispose() {
     _poseTimer?.cancel();
+    _gestureHintTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
+    if (_gestureModeEnabled) {
+      _sessionManager?.setHandTracking(false);
+    }
     _sessionManager?.dispose();
+    _handOverlay.dispose();
     super.dispose();
   }
 
@@ -355,6 +390,7 @@ class _ARDiagramPageState extends State<ARDiagramPage>
     sessionManager.onError = _handleSessionError;
     sessionManager.onPlaneDetected = _handlePlaneDetected;
     sessionManager.onPlaneOrPointTap = _handleTap;
+    sessionManager.onHandGesture = _handleHandGestureFrame;
 
     if (_isCameraPermissionGranted) {
       _initializeSession();
@@ -548,8 +584,152 @@ class _ARDiagramPageState extends State<ARDiagramPage>
       if (!mounted) return;
     }
 
+    _lastCameraPose = pose;
     if (anchorPose != null) {
+      _lastAnchorPose = anchorPose;
       await _updateBillboardsFromAnchorTransform(anchorPose);
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // Hand gesture controls
+  // -------------------------------------------------------------------
+
+  Future<void> _toggleGestureMode() async {
+    if (_gestureModeEnabled) {
+      await _disableGestureMode();
+      return;
+    }
+
+    final sm = _sessionManager;
+    if (sm == null) return;
+
+    final size = MediaQuery.of(context).size;
+    _gestureInterpreter = HandGestureInterpreter(
+      viewAspect: size.height > 0 ? size.width / size.height : 16 / 9,
+    );
+
+    final supported = await sm.setHandTracking(true);
+    if (!mounted) return;
+    if (!supported) {
+      _gestureInterpreter = null;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Hand gestures are unavailable on this device.'),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      _gestureModeEnabled = true;
+      _gestureHintVisible = true;
+    });
+    _gestureHintTimer?.cancel();
+    _gestureHintTimer = Timer(const Duration(seconds: 4), () {
+      if (mounted) setState(() => _gestureHintVisible = false);
+    });
+  }
+
+  Future<void> _disableGestureMode() async {
+    if (!_gestureModeEnabled) return;
+    _gestureHintTimer?.cancel();
+    _gestureInterpreter = null;
+    _handOverlay.value = const _HandOverlayModel(hands: [], zooming: false);
+    if (mounted) {
+      setState(() {
+        _gestureModeEnabled = false;
+        _gestureHintVisible = false;
+      });
+    } else {
+      _gestureModeEnabled = false;
+    }
+    await _sessionManager?.setHandTracking(false);
+  }
+
+  void _handleHandGestureFrame(HandGestureFrame frame) {
+    final interpreter = _gestureInterpreter;
+    if (!_gestureModeEnabled || interpreter == null || !mounted) return;
+
+    var zooming = _handOverlay.value.zooming;
+    for (final command in interpreter.ingest(frame)) {
+      switch (command) {
+        case DragStart():
+          break;
+        case DragUpdate(:final delta):
+          _applyDragDelta(delta);
+        case DragEnd():
+          break;
+        case ZoomStart():
+          _zoomScaleAtStart = _diagramScale;
+          zooming = true;
+        case ZoomUpdate(:final spanRatio):
+          _diagramScale = (_zoomScaleAtStart * spanRatio)
+              .clamp(_minDiagramScale, _maxDiagramScale);
+          _applyDiagramTransform();
+        case ZoomEnd():
+          zooming = false;
+      }
+    }
+    _handOverlay.value =
+        _HandOverlayModel(hands: interpreter.indicators, zooming: zooming);
+  }
+
+  /// Moves the diagram in the camera-facing plane at its current distance.
+  void _applyDragDelta(Offset normDelta) {
+    final cameraPose = _lastCameraPose;
+    final anchorPose = _lastAnchorPose;
+    if (cameraPose == null || anchorPose == null) return;
+
+    final objectWorld = anchorPose.getTranslation() +
+        anchorPose.getRotation().transformed(_diagramOffset);
+    final distance =
+        (objectWorld - cameraPose.getTranslation()).length.clamp(0.3, 10.0);
+
+    _diagramOffset += computeAnchorLocalDelta(
+      cameraPose: cameraPose,
+      anchorPose: anchorPose,
+      normDelta: normDelta,
+      distance: distance,
+    );
+    _applyDiagramTransform();
+  }
+
+  /// Re-derives every node transform from [_diagramOffset] and
+  /// [_diagramScale]. All 13 nodes are siblings under the anchor, so cards
+  /// and pointer lines must be moved/scaled along with the rocket.
+  void _applyDiagramTransform() {
+    final rocketNode = _rocketNode;
+    if (rocketNode == null) return;
+    final scale = _diagramScale;
+
+    rocketNode.transform = Matrix4.compose(
+      _diagramOffset,
+      Quaternion.identity(),
+      _rocketScale * scale,
+    );
+
+    final cardCount = math.min(
+      math.min(_flashcardNodes.length, _cardRotations.length),
+      _labels.length,
+    );
+    for (var i = 0; i < cardCount; i++) {
+      _flashcardNodes[i].transform = Matrix4.compose(
+        _diagramOffset + _labels[i].labelOffset * scale,
+        _cardRotations[i],
+        _cardScale * scale,
+      );
+    }
+
+    final lineCount =
+        math.min(_pointerLineNodes.length, _lineGeometries.length);
+    for (var i = 0; i < lineCount; i++) {
+      final geometry = _lineGeometries[i];
+      _pointerLineNodes[i].transform = Matrix4.compose(
+        _diagramOffset + geometry.center * scale,
+        geometry.rotation,
+        geometry.baseScale * scale,
+      );
     }
   }
 
@@ -559,6 +739,11 @@ class _ARDiagramPageState extends State<ARDiagramPage>
 
   Future<void> _reset() async {
     _poseTimer?.cancel();
+    await _disableGestureMode();
+    _diagramOffset = Vector3.zero();
+    _diagramScale = 1.0;
+    _zoomScaleAtStart = 1.0;
+    _lastAnchorPose = null;
     final om = _objectManager;
     final am = _anchorManager;
     final node = _rocketNode;
@@ -574,10 +759,14 @@ class _ARDiagramPageState extends State<ARDiagramPage>
         om?.removeNode(cardNode);
       }
       _flashcardNodes.clear();
+      _cardRotations.clear();
+      _lineGeometries.clear();
 
       if (node != null) om?.removeNode(node);
       if (anchor != null) am?.removeAnchor(anchor);
-    } catch (_) {}
+    } catch (_) {
+      // Ignore cleanup errors and return the UI to placement mode anyway.
+    }
 
     if (!mounted) return;
     setState(() {
@@ -602,6 +791,8 @@ class _ARDiagramPageState extends State<ARDiagramPage>
 
     _flashcardNodes.clear();
     _pointerLineNodes.clear();
+    _cardRotations.clear();
+    _lineGeometries.clear();
 
     for (final label in _labels) {
       final cardNode = ARNode(
@@ -622,6 +813,7 @@ class _ARDiagramPageState extends State<ARDiagramPage>
       }
 
       _flashcardNodes.add(cardNode);
+      _cardRotations.add(Quaternion.identity());
 
       final lineVector = label.pointerTarget - label.labelOffset;
       final lineLength = lineVector.length;
@@ -655,6 +847,17 @@ class _ARDiagramPageState extends State<ARDiagramPage>
 
       if (didAddLine ?? false) {
         _pointerLineNodes.add(lineNode);
+        _lineGeometries.add(
+          _PointerLineGeometry(
+            center: lineCenter,
+            rotation: _quaternionFromTo(Vector3(1.0, 0.0, 0.0), lineDirection),
+            baseScale: Vector3(
+              (lineLength * 0.5) * _iosModelCompensation,
+              0.004 * _iosModelCompensation,
+              0.004 * _iosModelCompensation,
+            ),
+          ),
+        );
       }
     }
 
@@ -671,7 +874,7 @@ class _ARDiagramPageState extends State<ARDiagramPage>
       return;
     }
 
-    final cameraPose = await sessionManager.getCameraPose();
+    final cameraPose = _lastCameraPose ?? await sessionManager.getCameraPose();
     if (cameraPose == null || !mounted) {
       return;
     }
@@ -687,10 +890,16 @@ class _ARDiagramPageState extends State<ARDiagramPage>
       cameraLocalV4.z,
     );
 
-    for (var index = 0; index < _flashcardNodes.length; index++) {
+    final cardCount = math.min(
+      math.min(_flashcardNodes.length, _cardRotations.length),
+      _labels.length,
+    );
+    for (var index = 0; index < cardCount; index++) {
       final label = _labels[index];
       final cardNode = _flashcardNodes[index];
-      final toCamera = cameraLocal - label.labelOffset;
+      final effectiveOffset =
+          _diagramOffset + label.labelOffset * _diagramScale;
+      final toCamera = cameraLocal - effectiveOffset;
       if (toCamera.length <= 0.0001) {
         continue;
       }
@@ -699,7 +908,12 @@ class _ARDiagramPageState extends State<ARDiagramPage>
         Vector3(0.0, 0.0, 1.0),
         toCamera.normalized(),
       );
-      cardNode.rotationFromQuaternion = cardRotation;
+      _cardRotations[index] = cardRotation;
+      cardNode.transform = Matrix4.compose(
+        effectiveOffset,
+        cardRotation,
+        _cardScale * _diagramScale,
+      );
     }
   }
 
@@ -818,6 +1032,23 @@ class _ARDiagramPageState extends State<ARDiagramPage>
           'Saturn V Diagram',
           style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
         ),
+        actions: [
+          if (_state == _PlacementState.placed)
+            IconButton(
+              tooltip: _gestureModeEnabled
+                  ? 'Disable hand gestures'
+                  : 'Control with hand gestures',
+              onPressed: _toggleGestureMode,
+              icon: Icon(
+                _gestureModeEnabled
+                    ? Icons.back_hand
+                    : Icons.back_hand_outlined,
+                color: _gestureModeEnabled
+                    ? Theme.of(context).colorScheme.primary
+                    : Colors.white,
+              ),
+            ),
+        ],
       ),
       body: Stack(
         fit: StackFit.expand,
@@ -830,6 +1061,40 @@ class _ARDiagramPageState extends State<ARDiagramPage>
             ARView(
               onARViewCreated: _onARViewCreated,
               planeDetectionConfig: PlaneDetectionConfig.horizontal,
+            ),
+
+          // Hand gesture indicators
+          if (_gestureModeEnabled)
+            ValueListenableBuilder<_HandOverlayModel>(
+              valueListenable: _handOverlay,
+              builder: (context, model, _) => IgnorePointer(
+                child: CustomPaint(
+                  painter: _HandOverlayPainter(
+                    model: model,
+                    accentColor: Theme.of(context).colorScheme.primary,
+                  ),
+                  size: Size.infinite,
+                ),
+              ),
+            ),
+
+          // Gesture hint chip
+          if (_gestureModeEnabled)
+            Align(
+              alignment: Alignment.bottomCenter,
+              child: SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 24),
+                  child: AnimatedOpacity(
+                    opacity: _gestureHintVisible ? 1.0 : 0.0,
+                    duration: const Duration(milliseconds: 400),
+                    child: const _Chip(
+                      label: 'Pinch to grab · two hands to zoom',
+                      icon: Icons.back_hand_outlined,
+                    ),
+                  ),
+                ),
+              ),
             ),
 
           // HUD
@@ -859,6 +1124,79 @@ class _ARDiagramPageState extends State<ARDiagramPage>
       ),
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// Hand gesture overlay
+// ---------------------------------------------------------------------------
+
+/// Precomputed anchor-local geometry of a pointer line, captured at add time
+/// so gesture transforms are pure arithmetic.
+class _PointerLineGeometry {
+  _PointerLineGeometry({
+    required this.center,
+    required this.rotation,
+    required this.baseScale,
+  });
+
+  final Vector3 center;
+  final Quaternion rotation;
+  final Vector3 baseScale;
+}
+
+class _HandOverlayModel {
+  const _HandOverlayModel({required this.hands, required this.zooming});
+
+  final List<HandIndicator> hands;
+  final bool zooming;
+}
+
+class _HandOverlayPainter extends CustomPainter {
+  _HandOverlayPainter({required this.model, required this.accentColor});
+
+  final _HandOverlayModel model;
+  final Color accentColor;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final centers = <Offset>[];
+    for (final hand in model.hands) {
+      centers.add(Offset(
+        hand.position.dx * size.width,
+        hand.position.dy * size.height,
+      ));
+    }
+
+    if (model.zooming && centers.length >= 2) {
+      final linePaint = Paint()
+        ..color = accentColor.withValues(alpha: 0.7)
+        ..strokeWidth = 2;
+      canvas.drawLine(centers[0], centers[1], linePaint);
+    }
+
+    for (var i = 0; i < centers.length; i++) {
+      final hand = model.hands[i];
+      final center = centers[i];
+      if (hand.isPinching) {
+        final glowPaint = Paint()
+          ..color = accentColor.withValues(alpha: 0.35)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10);
+        canvas.drawCircle(center, 18, glowPaint);
+        final fillPaint = Paint()..color = accentColor;
+        canvas.drawCircle(center, 12, fillPaint);
+      } else {
+        final ringPaint = Paint()
+          ..color = Colors.white.withValues(alpha: 0.85)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 3;
+        canvas.drawCircle(center, 16, ringPaint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _HandOverlayPainter oldDelegate) =>
+      oldDelegate.model != model || oldDelegate.accentColor != accentColor;
 }
 
 // ---------------------------------------------------------------------------

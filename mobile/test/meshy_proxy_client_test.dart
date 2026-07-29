@@ -2,12 +2,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:genai/src/meshy_proxy_client.dart';
 
 void main() {
-  test('uses nixos proxy by default when no override is provided', () {
+  test('uses the localhost proxy by default when no override is provided', () {
     final configuration = MeshyProxyConfiguration.fromRawValue(null);
 
     expect(configuration.error, isNull);
     expect(configuration.client, isNotNull);
-    expect(configuration.client!.baseUri, Uri.parse('http://nixos:8080'));
+    expect(configuration.client!.baseUri, Uri.parse('http://localhost:8080'));
   });
 
   test('uses the override URL when MESHY_PROXY_BASE_URL is provided', () {
@@ -27,7 +27,7 @@ void main() {
     final configuration = MeshyProxyConfiguration.fromRawValue('not-a-url');
 
     expect(configuration.client, isNull);
-    expect(configuration.error, contains('http://nixos:8080'));
+    expect(configuration.error, contains('http://localhost:8080'));
   });
 
   test('parses a completed Meshy generation job payload', () {
@@ -59,6 +59,17 @@ void main() {
     expect(job.thumbnailUrl, 'https://example.com/thumb.png');
     expect(job.updatedAt, DateTime.parse('2026-03-14T05:27:08.000Z').toUtc());
     expect(job.isTerminal, isTrue);
+  });
+
+  test('falls back to unknown for an unrecognised status name', () {
+    final job = MeshyGenerationJob.fromJson(<String, dynamic>{
+      'jobId': 'job-123',
+      'status': 'texturing',
+      'prompt': 'a jade fox statue',
+    });
+
+    expect(job.status, MeshyJobStatus.unknown);
+    expect(job.isTerminal, isFalse);
   });
 
   test('throws when the proxy payload is missing required fields', () {
