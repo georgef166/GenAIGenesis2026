@@ -51,7 +51,7 @@
   "buffers": [
     {
       "byteLength": 108,
-      "uri": "data:application/octet-stream;base64,AADAvwAAAAAAAMC/AADAPwAAAAAAAMC/AADAPwAAAAAAAMA/AADAvwAAAAAAAMA/AAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAABAAIAAAACAAMA"
+      "uri": "cloud.bin"
     }
   ],
   "bufferViews": [
