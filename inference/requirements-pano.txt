@@ -1,0 +1,12 @@
+# Installed on top of hyworld2/panogen/requirements.txt, which is cloned on the
+# box and pins the diffusers/transformers/numpy versions this must not fight.
+# torch and torchvision come from the cu128 index first — see README.md.
+fastapi
+uvicorn[standard]
+hf_transfer
+trimesh
+pillow
+# Missing from HY-World's own requirements.txt, but load_lora_weights() needs
+# it: without peft the LoRA load dies with "PEFT backend is required for this
+# method." and the panorama model is useless.
+peft==0.20.0
