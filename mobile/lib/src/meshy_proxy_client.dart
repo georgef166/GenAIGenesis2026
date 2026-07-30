@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 class MeshyProxyConfiguration {
   const MeshyProxyConfiguration._({required this.client, required this.error});
@@ -46,18 +48,42 @@ class MeshyProxyConfiguration {
 class MeshyProxyClient {
   MeshyProxyClient({required Uri baseUri, HttpClient? httpClient})
     : _baseUri = baseUri,
-      _httpClient = httpClient ?? HttpClient();
+      _httpClient =
+          httpClient ??
+          (HttpClient()..connectionTimeout = const Duration(seconds: 10));
+
+  // ponytail: JSON polls only. Asset downloads run through
+  // `MeshyModelHistoryStore` and must never carry a wall-clock timeout — the
+  // payloads this proxy streams are megabytes over a bridged LAN link.
+  static const _requestTimeout = Duration(seconds: 20);
 
   final Uri _baseUri;
   final HttpClient _httpClient;
 
   Uri get baseUri => _baseUri;
 
-  Future<MeshyGenerationJob> createJob(String prompt) async {
+  /// [kind] is `'object'` or `'world'`. Both self-hosted models require
+  /// [imageBytes]; [steps] only applies to worlds.
+  Future<MeshyGenerationJob> createJob(
+    String prompt, {
+    String kind = 'object',
+    Uint8List? imageBytes,
+    int? steps,
+  }) async {
+    // ponytail: base64 in the JSON body, not multipart. This client writes to a
+    // raw `dart:io` HttpRequest where multipart means hand-building boundaries;
+    // the phone already downscales to well under the proxy's 8 MB cap, so the
+    // ~33% wire overhead is cheaper than the code. Switch to a streamed
+    // multipart POST here and at both proxy hops if photos ever grow.
     final response = await _sendJsonRequest(
       method: 'POST',
       pathSegments: const <String>['api', 'meshy', 'generate'],
-      body: <String, Object?>{'prompt': prompt},
+      body: <String, Object?>{
+        'prompt': prompt,
+        'kind': kind,
+        if (imageBytes != null) 'imageBase64': base64Encode(imageBytes),
+        'steps': ?steps,
+      },
     );
     return MeshyGenerationJob.fromJson(response);
   }
@@ -83,20 +109,44 @@ class MeshyProxyClient {
       request.write(jsonEncode(body));
     }
 
-    final response = await request.close();
+    final HttpClientResponse response;
+    try {
+      response = await request.close().timeout(_requestTimeout);
+    } on TimeoutException {
+      throw const MeshyProxyException(
+        'The local generation proxy did not respond in time.',
+      );
+    }
+
     final responseBody = await response.transform(utf8.decoder).join();
-    final decodedBody = responseBody.isEmpty ? null : jsonDecode(responseBody);
+    // The status check comes first: an error body is often not JSON at all, and
+    // decoding it first threw a raw FormatException past the error envelope.
+    final decodedBody = _tryDecodeJson(responseBody);
     if (response.statusCode >= HttpStatus.badRequest) {
-      throw MeshyProxyException(_extractErrorMessage(decodedBody, response));
+      throw MeshyProxyException(
+        _extractErrorMessage(decodedBody, response),
+        statusCode: response.statusCode,
+      );
     }
 
     if (decodedBody is! Map<String, dynamic>) {
       throw const MeshyProxyException(
-        'The local Meshy proxy returned an unexpected JSON payload.',
+        'The local generation proxy returned an unexpected JSON payload.',
       );
     }
 
     return decodedBody;
+  }
+
+  Object? _tryDecodeJson(String body) {
+    if (body.isEmpty) {
+      return null;
+    }
+    try {
+      return jsonDecode(body);
+    } on FormatException {
+      return null;
+    }
   }
 
   Uri _buildUri(List<String> extraSegments) {
@@ -119,7 +169,7 @@ class MeshyProxyClient {
       }
     }
 
-    return 'The local Meshy proxy returned HTTP ${response.statusCode}.';
+    return 'The local generation proxy returned HTTP ${response.statusCode}.';
   }
 }
 
@@ -130,10 +180,12 @@ class MeshyGenerationJob {
     required this.jobId,
     required this.status,
     required this.prompt,
+    this.kind,
     this.stage,
     this.previewTaskId,
     this.refineTaskId,
     this.glbUrl,
+    this.panoramaUrl,
     this.activeTaskId,
     this.meshyStatus,
     this.progress,
@@ -147,10 +199,14 @@ class MeshyGenerationJob {
   final String jobId;
   final MeshyJobStatus status;
   final String prompt;
+
+  /// `'object'` or `'world'`; absent on older proxies, which only made objects.
+  final String? kind;
   final String? stage;
   final String? previewTaskId;
   final String? refineTaskId;
   final String? glbUrl;
+  final String? panoramaUrl;
   final String? activeTaskId;
   final double? progress;
   final String? meshyStatus;
@@ -169,7 +225,7 @@ class MeshyGenerationJob {
     final jobId = json['jobId'] as String?;
     if (statusName == null || prompt == null || jobId == null) {
       throw const MeshyProxyException(
-        'The local Meshy proxy response was missing job metadata.',
+        'The local generation proxy response was missing job metadata.',
       );
     }
 
@@ -178,10 +234,12 @@ class MeshyGenerationJob {
       jobId: jobId,
       status: status,
       prompt: prompt,
+      kind: json['kind'] as String?,
       stage: json['stage'] as String?,
       previewTaskId: json['previewTaskId'] as String?,
       refineTaskId: json['refineTaskId'] as String?,
       glbUrl: json['glbUrl'] as String?,
+      panoramaUrl: json['panoramaUrl'] as String?,
       activeTaskId: json['activeTaskId'] as String?,
       progress: (json['progress'] as num?)?.toDouble(),
       meshyStatus: json['meshyStatus'] as String?,
@@ -203,9 +261,14 @@ class MeshyGenerationJob {
 }
 
 class MeshyProxyException implements Exception {
-  const MeshyProxyException(this.message);
+  const MeshyProxyException(this.message, {this.statusCode});
 
   final String message;
+
+  /// The proxy's HTTP status, or `null` when the call never got a response at
+  /// all. A poll retries on everything except a 404: that one means the proxy
+  /// genuinely has no such job, so waiting cannot help.
+  final int? statusCode;
 
   @override
   String toString() => 'MeshyProxyException: $message';

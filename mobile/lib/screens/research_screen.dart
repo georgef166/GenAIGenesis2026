@@ -19,7 +19,11 @@ class _ResearchScreenState extends State<ResearchScreen> {
     'LANGFLOW_FLOW_ID',
     defaultValue: '52f27664-602e-4012-bafd-0bf43bb1701c',
   );
-  static const _appToken = String.fromEnvironment('LANGFLOW_APP_TOKEN');
+  static const _appTokenUpper = String.fromEnvironment('LANGFLOW_APP_TOKEN');
+  static const _appTokenLower = String.fromEnvironment('langflow_app_token');
+  static final _appToken = _appTokenUpper.isNotEmpty
+      ? _appTokenUpper
+      : _appTokenLower;
 
   final _topicController = TextEditingController();
   late final LangFlowService _service;
@@ -49,7 +53,9 @@ class _ResearchScreenState extends State<ResearchScreen> {
     if (_appToken.isEmpty) {
       setState(() {
         _error =
-            'Missing LANGFLOW_APP_TOKEN. Start the app with --dart-define.';
+            'Missing LANGFLOW_APP_TOKEN. This value is read at build time. '
+            'Rebuild with --dart-define and then install the new APK, or use '
+            'flutter run with the same flags.';
       });
       return;
     }
@@ -97,9 +103,7 @@ class _ResearchScreenState extends State<ResearchScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Topic Research Lab'),
-      ),
+      appBar: AppBar(title: const Text('Topic Research Lab')),
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(

@@ -10,6 +10,10 @@ const defaultMeshyModelHistoryLimit = 20;
 const _modelCacheDirectoryName = 'meshy_models';
 const _modelHistoryIndexFileName = 'history.json';
 
+/// Job ids arrive in proxy JSON and are interpolated into both a filesystem
+/// path and an HTTP route, so they are validated before either use.
+final _safeJobIdPattern = RegExp(r'^[A-Za-z0-9_-]+$');
+
 enum MeshyPlacementRuntime { android, iOS, other }
 
 MeshyPlacementRuntime detectMeshyPlacementRuntime() {
@@ -41,6 +45,7 @@ class MeshyModelRecord {
     required this.updatedAt,
     required this.lastUsedAt,
     this.thumbnailUrl,
+    this.kind,
   });
 
   final String id;
@@ -48,6 +53,9 @@ class MeshyModelRecord {
   final String localRelativePath;
   final String originalGlbUrl;
   final String? thumbnailUrl;
+
+  /// `'object'` or `'world'`; absent means object.
+  final String? kind;
   final DateTime createdAt;
   final DateTime updatedAt;
   final DateTime lastUsedAt;
@@ -76,6 +84,7 @@ class MeshyModelRecord {
       localRelativePath: localRelativePath,
       originalGlbUrl: originalGlbUrl,
       thumbnailUrl: json['thumbnailUrl'] as String?,
+      kind: json['kind'] as String?,
       createdAt: createdAt,
       updatedAt: updatedAt,
       lastUsedAt: lastUsedAt,
@@ -88,6 +97,7 @@ class MeshyModelRecord {
     String? localRelativePath,
     String? originalGlbUrl,
     String? thumbnailUrl,
+    String? kind,
     DateTime? createdAt,
     DateTime? updatedAt,
     DateTime? lastUsedAt,
@@ -98,6 +108,7 @@ class MeshyModelRecord {
       localRelativePath: localRelativePath ?? this.localRelativePath,
       originalGlbUrl: originalGlbUrl ?? this.originalGlbUrl,
       thumbnailUrl: thumbnailUrl ?? this.thumbnailUrl,
+      kind: kind ?? this.kind,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       lastUsedAt: lastUsedAt ?? this.lastUsedAt,
@@ -111,6 +122,7 @@ class MeshyModelRecord {
       'localRelativePath': localRelativePath,
       'originalGlbUrl': originalGlbUrl,
       'thumbnailUrl': thumbnailUrl,
+      'kind': kind,
       'createdAt': createdAt.toUtc().toIso8601String(),
       'updatedAt': updatedAt.toUtc().toIso8601String(),
       'lastUsedAt': lastUsedAt.toUtc().toIso8601String(),
@@ -248,13 +260,14 @@ class MeshyActiveModel {
     required MeshyPlacementSource? remoteSource,
   }) {
     switch (runtime) {
-      case MeshyPlacementRuntime.android:
-        return _PlacementSourceSelection(primary: remoteSource ?? localSource);
       case MeshyPlacementRuntime.iOS:
         return _PlacementSourceSelection(
           primary: localSource,
           retry: remoteSource,
         );
+      // Android used to have no retry at all, so a blocked or slow remote GLB
+      // meant the cached copy on disk was never read.
+      case MeshyPlacementRuntime.android:
       case MeshyPlacementRuntime.other:
         return _PlacementSourceSelection(
           primary: remoteSource ?? localSource,
@@ -327,7 +340,7 @@ class MeshyModelHistoryStore {
     }
 
     final id = job.jobId.trim();
-    if (id.isEmpty) {
+    if (!_safeJobIdPattern.hasMatch(id)) {
       throw const MeshyModelHistoryException(
         'Meshy did not return a valid job id for model caching.',
       );
@@ -341,6 +354,7 @@ class MeshyModelHistoryStore {
         localRelativePath: relativePath,
         originalGlbUrl: glbUrl,
         thumbnailUrl: job.thumbnailUrl,
+        kind: job.kind,
         createdAt: job.createdAt ?? DateTime.now().toUtc(),
         updatedAt: job.updatedAt ?? DateTime.now().toUtc(),
         lastUsedAt: DateTime.now().toUtc(),
@@ -356,6 +370,7 @@ class MeshyModelHistoryStore {
       localRelativePath: relativePath,
       originalGlbUrl: glbUrl,
       thumbnailUrl: job.thumbnailUrl,
+      kind: job.kind,
       createdAt: job.createdAt ?? now,
       updatedAt: job.updatedAt ?? now,
       lastUsedAt: now,
@@ -487,16 +502,15 @@ class MeshyModelHistoryStore {
     final response = await request.close();
     if (response.statusCode < HttpStatus.ok ||
         response.statusCode >= HttpStatus.multipleChoices) {
+      await response.drain<void>();
       throw MeshyModelHistoryException(
         'Downloading the generated GLB failed with HTTP ${response.statusCode}.',
       );
     }
 
-    final bytes = await response.fold<List<int>>(
-      <int>[],
-      (buffer, chunk) => buffer..addAll(chunk),
-    );
-    await targetFile.writeAsBytes(bytes, flush: true);
+    // Straight to disk. Buffering the whole response first cost ~18x the file
+    // size in RSS and reliably killed the app on multi-megabyte payloads.
+    await response.pipe(targetFile.openWrite());
   }
 
   Future<void> _deletePrunedFiles(Iterable<MeshyModelRecord> records) async {

@@ -28,6 +28,8 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>This app uses the camera to place an AR dot on real-world surfaces.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>This app reads a photo you choose and expands it into a 360 AR world.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

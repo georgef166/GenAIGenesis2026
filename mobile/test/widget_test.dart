@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 
 import 'package:genai/src/ar_meshy_page.dart';
 import 'package:genai/src/meshy_model_history.dart';
@@ -82,8 +83,9 @@ void main() {
       ),
     );
 
-    expect(find.text('Meshy Prompt'), findsOneWidget);
+    expect(find.text('Generation'), findsOneWidget);
     expect(find.text('Refining...'), findsOneWidget);
+    expect(find.text('Fast · 12 steps'), findsNothing);
 
     final button = tester.widget<FilledButton>(find.byType(FilledButton));
     expect(button.onPressed, isNull);
@@ -130,6 +132,48 @@ void main() {
     await tester.pump();
 
     expect(selectedRecord?.id, 'job-1');
+  });
+
+  testWidgets('prompt panel offers a photo source in world mode', (
+    WidgetTester tester,
+  ) async {
+    final controller = TextEditingController(text: 'a sunlit alpine meadow');
+    ImageSource? requestedSource;
+    int? requestedSteps;
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MeshyPromptPanel(
+            promptController: controller,
+            helperText: 'Add a photo to expand into a world.',
+            generateLabel: 'Generate world',
+            // The page disables this until a photo is chosen.
+            onGenerate: null,
+            kind: 'world',
+            onPickImage: (source) => requestedSource = source,
+            onWorldStepsChanged: (steps) => requestedSteps = steps,
+          ),
+        ),
+      ),
+    );
+
+    expect(
+      find.text('Add a photo to expand into a 360 world.'),
+      findsOneWidget,
+    );
+    expect(find.text('Fast · 12 steps'), findsOneWidget);
+    expect(find.text('Quality · 40 steps'), findsOneWidget);
+
+    await tester.tap(find.text('Quality · 40 steps'));
+    await tester.pump();
+    expect(requestedSteps, 40);
+
+    await tester.tap(find.text('Gallery'));
+    await tester.pump();
+
+    expect(requestedSource, ImageSource.gallery);
   });
 }
 

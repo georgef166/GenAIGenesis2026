@@ -16,6 +16,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   path_provider: ^2.1.5
   http: ^1.2.2
+  image_picker: ^1.1.2
   permission_handler: ^11.3.1
   vector_math: ^2.2.0
 

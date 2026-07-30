@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:io' show Platform;
+import 'dart:typed_data';
 
 import 'package:ar_flutter_plugin_2/ar_flutter_plugin.dart';
 import 'package:ar_flutter_plugin_2/datatypes/config_planedetection.dart';
@@ -11,6 +13,7 @@ import 'package:ar_flutter_plugin_2/models/ar_anchor.dart';
 import 'package:ar_flutter_plugin_2/models/ar_hittest_result.dart';
 import 'package:ar_flutter_plugin_2/models/ar_node.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:vector_math/vector_math_64.dart' hide Colors;
 
@@ -20,7 +23,22 @@ import 'meshy_proxy_client.dart';
 const _backgroundColor = Color(0xFF02040a);
 
 const _jobPollInterval = Duration(seconds: 3);
+
+/// A generation runs for minutes and the proxy keeps tracking it, so a dropped
+/// poll must not abandon the job. Retry a bounded run before giving up.
+const _maxPollFailures = 5;
+const _maxPollRetryBackoff = Duration(seconds: 15);
+
 const _generatedModelScale = 0.14;
+
+/// The vendored plugin's iOS side scales every GLTF child by 0.01, so every
+/// `localGLTF2`/`webGLB` node has to undo it. Mirrors `ar_rocket_page.dart:32`.
+const _iosPluginModelScaleCompensation = 100.0;
+
+/// The proxy caps an upload at 8 MB decoded and a modern phone photo is 4–12 MB
+/// straight off the sensor, so the picker resamples before we ever see bytes.
+const _uploadMaxEdge = 1536.0;
+const _uploadJpegQuality = 85;
 
 enum ARSessionState {
   checkingPermission,
@@ -61,6 +79,7 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
       MeshyModelHistoryStore();
   late final MeshyPlacementRuntime _placementRuntime =
       detectMeshyPlacementRuntime();
+  final ImagePicker _imagePicker = ImagePicker();
   final List<MeshyModelRecord> _recentModels = <MeshyModelRecord>[];
 
   ARSessionManager? _sessionManager;
@@ -76,6 +95,10 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
   String? _generationErrorMessage;
   MeshyGenerationJob? _currentJob;
   MeshyActiveModel? _activeModel;
+  String _generationKind = 'object';
+  Uint8List? _generationImageBytes;
+  int _worldSteps = 12;
+  String? _panoramaUrl;
   bool _isCameraPermissionGranted = false;
   bool _hasHorizontalPlane = false;
   bool _hasInitializedSession = false;
@@ -83,9 +106,11 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
   bool _isLoadingHistory = true;
   int _planeCount = 0;
   int _generationToken = 0;
-  bool _showPlacementUi = true;
+  int _pollRetryAttempt = 0;
 
   MeshyProxyClient? get _meshyClient => _proxyConfiguration.client;
+
+  bool get _isWorldMode => _generationKind == 'world';
 
   bool get _isGenerating =>
       _generationStage == MeshyGenerationStage.submitting ||
@@ -196,12 +221,18 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
       case ARSessionState.error:
         return _sessionErrorMessage ?? 'The AR session could not start.';
       case ARSessionState.placing:
-        return 'Anchoring the generated Meshy model to the detected plane...';
+        return 'Anchoring the generated model to the detected plane...';
       case ARSessionState.placed:
         return 'Model placed. Reset to place it again or generate a new prompt.';
       case ARSessionState.scanning:
       case ARSessionState.readyToPlace:
         break;
+    }
+
+    if (_pollRetryAttempt > 0) {
+      return 'Lost contact with the server — retrying '
+          '($_pollRetryAttempt of $_maxPollFailures). The generation is still '
+          'running on the server.';
     }
 
     switch (_generationStage) {
@@ -211,20 +242,20 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
               'if you want to generate a new one.';
         }
         return _proxyConfiguration.error ??
-            'The app is missing the Meshy proxy base URL.';
+            'The app is missing the generation proxy base URL.';
       case MeshyGenerationStage.submitting:
-        return 'Sending your prompt to the local Meshy proxy...';
+        return 'Sending your photo to the local generation proxy...';
       case MeshyGenerationStage.previewing:
         return _buildProgressStatusMessage(
-          stageFallback: 'Meshy is creating a preview model from your prompt.',
+          stageFallback: 'The generation backend is creating your model.',
         );
       case MeshyGenerationStage.refining:
         return _buildProgressStatusMessage(
-          stageFallback:
-              'Meshy is refining the preview into a textured GLB model.',
+          stageFallback: 'The generation backend is texturing the GLB model.',
         );
       case MeshyGenerationStage.error:
-        return _generationErrorMessage ?? 'Meshy could not generate a model.';
+        return _generationErrorMessage ??
+            'The backend could not generate a model.';
       case MeshyGenerationStage.ready:
         return _hasHorizontalPlane
             ? 'Tap a horizontal surface to place the selected model.'
@@ -262,21 +293,21 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
       case MeshyGenerationStage.previewing:
         return _buildProgressHelperText(
           fallback:
-              'Meshy preview task is running on the local proxy.'
+              'The generation task is running on the local proxy.'
               '$currentJobSuffix',
         );
       case MeshyGenerationStage.refining:
         return _buildProgressHelperText(
           fallback:
-              'Preview complete. Meshy is refining the model now.'
+              'Shape complete. The backend is texturing the model now.'
               '$currentJobSuffix',
         );
       case MeshyGenerationStage.ready:
         return _activeModel?.isPersisted == true
             ? 'Saved model ready. Tap a plane to place it.'
-            : 'Meshy model ready. Tap a plane to place it.';
+            : 'Generated model ready. Tap a plane to place it.';
       case MeshyGenerationStage.error:
-        return _generationErrorMessage ?? 'Meshy generation failed.';
+        return _generationErrorMessage ?? 'Generation failed.';
       case MeshyGenerationStage.idle:
         return 'Run the proxy on your computer at http://nixos:8080. '
             'Use --dart-define=MESHY_PROXY_BASE_URL=http://<LAN-IP>:8080 '
@@ -352,7 +383,7 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
       setState(() {
         _isLoadingHistory = false;
       });
-      _showTransientMessage('Failed to load saved Meshy models: $error');
+      _showTransientMessage('Failed to load saved generated models: $error');
     }
   }
 
@@ -561,12 +592,14 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
         _activeModel = placedModel;
         _sessionState = ARSessionState.placed;
         _sessionErrorMessage = null;
-        _showPlacementUi = false;
+        // The overlay and the prompt panel stay up: every control that could
+        // bring them back — Reset included — lives inside them, so hiding both
+        // here left the screen with no way out.
       });
       _sessionManager?.showPlanes(false);
       if (usedFallbackSource) {
         _showTransientMessage(
-          'Used the original Meshy URL because the saved local model '
+          'Used the original generation URL because the saved local model '
           'could not be loaded on this device.',
         );
       }
@@ -583,10 +616,13 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
   }
 
   ARNode _buildARNode(MeshyActiveModel model) {
+    final scale =
+        _generatedModelScale *
+        (Platform.isIOS ? _iosPluginModelScaleCompensation : 1.0);
     return ARNode(
       type: model.nodeType,
       uri: model.nodeUri,
-      scale: Vector3.all(_generatedModelScale),
+      scale: Vector3.all(scale),
       position: Vector3(0.0, 0.01, 0.0),
       rotation: Vector4(0.0, 1.0, 0.0, 0.0),
     );
@@ -641,6 +677,17 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
       return;
     }
 
+    final imageBytes = _generationImageBytes;
+    if (imageBytes == null) {
+      setState(() {
+        _generationStage = MeshyGenerationStage.error;
+        _generationErrorMessage =
+            'Take or choose a photo before generating '
+            '${_isWorldMode ? 'a world' : 'an object'}.';
+      });
+      return;
+    }
+
     FocusManager.instance.primaryFocus?.unfocus();
 
     final generationToken = ++_generationToken;
@@ -657,7 +704,12 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
     _syncReadyState();
 
     try {
-      final createdJob = await client.createJob(prompt);
+      final createdJob = await client.createJob(
+        prompt,
+        kind: _generationKind,
+        imageBytes: imageBytes,
+        steps: _isWorldMode ? _worldSteps : null,
+      );
       if (!_isCurrentGeneration(generationToken)) {
         return;
       }
@@ -671,92 +723,221 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
     }
   }
 
+  void _handleWorldStepsChanged(int steps) {
+    if (steps == _worldSteps) {
+      return;
+    }
+    setState(() => _worldSteps = steps);
+  }
+
+  void _handleKindChanged(String kind) {
+    if (kind == _generationKind) {
+      return;
+    }
+
+    setState(() {
+      _generationKind = kind;
+      // Don't carry "enter a prompt"/"pick a photo" complaints across a mode
+      // switch, but leave a missing-proxy message alone: it is still true.
+      if (_generationStage == MeshyGenerationStage.error) {
+        _generationStage = MeshyGenerationStage.idle;
+        _generationErrorMessage = null;
+      }
+    });
+  }
+
+  Future<void> _handlePickImage(ImageSource source) async {
+    // The AR session already owns the camera grant; reuse it rather than
+    // opening a second permission flow the user has to answer twice.
+    if (source == ImageSource.camera && !_isCameraPermissionGranted) {
+      await _ensureCameraPermission();
+      if (!mounted || !_isCameraPermissionGranted) {
+        return;
+      }
+    }
+
+    try {
+      final picked = await _imagePicker.pickImage(
+        source: source,
+        maxWidth: _uploadMaxEdge,
+        maxHeight: _uploadMaxEdge,
+        imageQuality: _uploadJpegQuality,
+      );
+      if (picked == null || !mounted) {
+        return;
+      }
+
+      final bytes = await picked.readAsBytes();
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _generationImageBytes = bytes;
+        if (_generationStage == MeshyGenerationStage.error) {
+          _generationStage = MeshyGenerationStage.idle;
+          _generationErrorMessage = null;
+        }
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      _showTransientMessage('Could not load that photo: $error');
+    }
+  }
+
   Future<void> _pollGenerationJob(int generationToken, String jobId) async {
     final client = _meshyClient;
     if (client == null) {
       return;
     }
 
+    var consecutiveFailures = 0;
+
     while (_isCurrentGeneration(generationToken)) {
+      final MeshyGenerationJob job;
       try {
-        final job = await client.getJob(jobId);
+        job = await client.getJob(jobId);
+      } catch (error) {
         if (!_isCurrentGeneration(generationToken)) {
           return;
         }
 
-        setState(() {
-          _currentJob = job;
-        });
-
-        if (job.status == MeshyJobStatus.error) {
+        // A 404 means the proxy genuinely has no such job — it keeps them in
+        // memory, so a restart loses them and waiting cannot help. Every other
+        // failure is a dropped read while the generation is still running
+        // upstream, and abandoning it throws away minutes of GPU work.
+        final isMissingJob =
+            error is MeshyProxyException && error.statusCode == 404;
+        consecutiveFailures++;
+        if (isMissingJob || consecutiveFailures >= _maxPollFailures) {
           _setGenerationError(
             generationToken,
-            job.error ?? 'Meshy failed to generate a model.',
+            isMissingJob
+                ? _normalizeGenerationError(error)
+                : 'Lost contact with the server after $consecutiveFailures '
+                      'consecutive attempts. '
+                      '${_normalizeGenerationError(error)}',
           );
-          return;
-        }
-
-        if (job.status == MeshyJobStatus.completed) {
-          final glbUrl = job.glbUrl;
-          if (glbUrl == null || glbUrl.isEmpty) {
-            _setGenerationError(
-              generationToken,
-              'Meshy completed the job without returning a GLB URL.',
-            );
-            return;
-          }
-
-          var activeModel = MeshyActiveModel.remoteSession(
-            id: job.jobId,
-            prompt: job.prompt,
-            glbUrl: glbUrl,
-            thumbnailUrl: job.thumbnailUrl,
-          );
-          String? cacheWarningMessage;
-          try {
-            final cacheResult = await _modelHistoryStore.cacheCompletedJob(
-              job: job,
-            );
-            activeModel = MeshyActiveModel.fromRecord(
-              cacheResult.record,
-              runtime: _placementRuntime,
-            );
-            final records = await _modelHistoryStore.loadRecords();
-            if (mounted) {
-              setState(() {
-                _recentModels
-                  ..clear()
-                  ..addAll(records);
-              });
-            }
-          } catch (error) {
-            cacheWarningMessage =
-                'Model ready for this session, but it could not be saved '
-                'locally for reuse: $error';
-          }
-
-          setState(() {
-            _activeModel = activeModel;
-            _generationStage = MeshyGenerationStage.ready;
-            _generationErrorMessage = null;
-          });
-          _syncReadyState();
-          if (cacheWarningMessage != null) {
-            _showTransientMessage(cacheWarningMessage);
-          }
           return;
         }
 
         setState(() {
-          _generationStage = _mapJobStatusToGenerationStage(job.status);
-          _generationErrorMessage = null;
+          _pollRetryAttempt = consecutiveFailures;
         });
-      } catch (error) {
-        _setGenerationError(generationToken, _normalizeGenerationError(error));
+        final backoff = _jobPollInterval * (1 << (consecutiveFailures - 1));
+        await _waitForNextPoll(
+          generationToken,
+          backoff > _maxPollRetryBackoff ? _maxPollRetryBackoff : backoff,
+        );
+        continue;
+      }
+
+      if (!_isCurrentGeneration(generationToken)) {
+        return;
+      }
+      consecutiveFailures = 0;
+
+      setState(() {
+        _currentJob = job;
+        _pollRetryAttempt = 0;
+      });
+
+      if (job.status == MeshyJobStatus.error) {
+        _setGenerationError(
+          generationToken,
+          job.error ?? 'The backend failed to generate a model.',
+        );
         return;
       }
 
-      await Future<void>.delayed(_jobPollInterval);
+      if (job.status == MeshyJobStatus.completed) {
+        final panoramaUrl = job.panoramaUrl;
+        if (job.kind == 'world' && panoramaUrl != null) {
+          // ponytail: worlds stop at a flat full-screen view. The inverted
+          // sky sphere (and the caching that would go with it) is the next
+          // milestone; nothing is downloaded or placed until then.
+          setState(() {
+            _panoramaUrl = panoramaUrl;
+            _generationStage = MeshyGenerationStage.ready;
+            _generationErrorMessage = null;
+          });
+          return;
+        }
+
+        final glbUrl = job.glbUrl;
+        if (glbUrl == null || glbUrl.isEmpty) {
+          _setGenerationError(
+            generationToken,
+            'The backend completed the job without returning a GLB URL.',
+          );
+          return;
+        }
+
+        var activeModel = MeshyActiveModel.remoteSession(
+          id: job.jobId,
+          prompt: job.prompt,
+          glbUrl: glbUrl,
+          thumbnailUrl: job.thumbnailUrl,
+        );
+        String? cacheWarningMessage;
+        try {
+          final cacheResult = await _modelHistoryStore.cacheCompletedJob(
+            job: job,
+          );
+          activeModel = MeshyActiveModel.fromRecord(
+            cacheResult.record,
+            runtime: _placementRuntime,
+          );
+          final records = await _modelHistoryStore.loadRecords();
+          if (mounted) {
+            setState(() {
+              _recentModels
+                ..clear()
+                ..addAll(records);
+            });
+          }
+        } catch (error) {
+          cacheWarningMessage =
+              'Model ready for this session, but it could not be saved '
+              'locally for reuse: $error';
+        }
+
+        if (!_isCurrentGeneration(generationToken)) {
+          return;
+        }
+        setState(() {
+          _activeModel = activeModel;
+          _generationStage = MeshyGenerationStage.ready;
+          _generationErrorMessage = null;
+        });
+        _syncReadyState();
+        if (cacheWarningMessage != null) {
+          _showTransientMessage(cacheWarningMessage);
+        }
+        return;
+      }
+
+      setState(() {
+        _generationStage = _mapJobStatusToGenerationStage(job.status);
+        _generationErrorMessage = null;
+      });
+
+      await _waitForNextPoll(generationToken, _jobPollInterval);
+    }
+  }
+
+  /// Sleeps in poll-interval slices so a long retry backoff never delays
+  /// cancellation: the loop still notices a changed [_generationToken] or an
+  /// unmounted widget within one poll interval, exactly as before the retries
+  /// existed.
+  Future<void> _waitForNextPoll(int generationToken, Duration delay) async {
+    var remaining = delay;
+    while (remaining > Duration.zero && _isCurrentGeneration(generationToken)) {
+      final slice = remaining < _jobPollInterval ? remaining : _jobPollInterval;
+      await Future<void>.delayed(slice);
+      remaining -= slice;
     }
   }
 
@@ -769,7 +950,8 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
       _modelNode = null;
       _activeModel = null;
       _sessionErrorMessage = null;
-      _showPlacementUi = true;
+      _panoramaUrl = null;
+      _pollRetryAttempt = 0;
     });
     _sessionManager?.showPlanes(true);
   }
@@ -803,7 +985,8 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
       _generationStage = MeshyGenerationStage.ready;
       _generationErrorMessage = null;
       _sessionErrorMessage = null;
-      _showPlacementUi = true;
+      _generationKind = 'object';
+      _panoramaUrl = null;
       _recentModels
         ..clear()
         ..addAll(records);
@@ -822,7 +1005,6 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
       _modelAnchor = null;
       _modelNode = null;
       _sessionErrorMessage = null;
-      _showPlacementUi = true;
     });
     _sessionManager?.showPlanes(true);
     _syncReadyState();
@@ -889,6 +1071,7 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
           ? MeshyGenerationStage.missingProxyConfig
           : MeshyGenerationStage.error;
       _generationErrorMessage = message;
+      _pollRetryAttempt = 0;
     });
     _syncReadyState();
   }
@@ -972,6 +1155,10 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
   }
 
   String get _generationChipLabel {
+    if (_pollRetryAttempt > 0) {
+      return 'Reconnecting $_pollRetryAttempt/$_maxPollFailures';
+    }
+
     final stageLabel = _currentMeshyStageLabel;
     final progressLabel = _currentProgressLabel;
 
@@ -1011,10 +1198,12 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    final panoramaUrl = _panoramaUrl;
     final canGenerate =
         !_isGenerating &&
         _meshyClient != null &&
-        _promptController.text.trim().isNotEmpty;
+        _promptController.text.trim().isNotEmpty &&
+        _generationImageBytes != null;
 
     return Scaffold(
       extendBodyBehindAppBar: true,
@@ -1032,7 +1221,7 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
               onARViewCreated: _onARViewCreated,
               planeDetectionConfig: PlaneDetectionConfig.horizontal,
             ),
-          if (_showPlacementUi)
+          if (panoramaUrl == null)
             SafeArea(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 220),
@@ -1058,26 +1247,41 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
                 ),
               ),
             ),
-          if (_showPlacementUi)
+          if (panoramaUrl == null)
             SafeArea(
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: Align(
                   alignment: Alignment.bottomCenter,
-                  child: MeshyPromptPanel(
-                    promptController: _promptController,
-                    helperText: _promptHelperText,
-                    generateLabel: _generateButtonLabel,
-                    onGenerate: canGenerate ? _handleGeneratePressed : null,
-                    recentModels: _recentModels,
-                    isLoadingRecentModels: _isLoadingHistory,
-                    onSelectRecentModel: _isGenerating
-                        ? null
-                        : _handleRecentModelSelected,
-                    activeModelId: _activeModel?.id,
+                  child: SingleChildScrollView(
+                    child: MeshyPromptPanel(
+                      promptController: _promptController,
+                      helperText: _promptHelperText,
+                      generateLabel: _generateButtonLabel,
+                      onGenerate: canGenerate ? _handleGeneratePressed : null,
+                      recentModels: _recentModels,
+                      isLoadingRecentModels: _isLoadingHistory,
+                      onSelectRecentModel: _isGenerating
+                          ? null
+                          : _handleRecentModelSelected,
+                      activeModelId: _activeModel?.id,
+                      kind: _generationKind,
+                      onKindChanged: _isGenerating ? null : _handleKindChanged,
+                      imageBytes: _generationImageBytes,
+                      onPickImage: _isGenerating ? null : _handlePickImage,
+                      worldSteps: _worldSteps,
+                      onWorldStepsChanged: _isGenerating
+                          ? null
+                          : _handleWorldStepsChanged,
+                    ),
                   ),
                 ),
               ),
+            ),
+          if (panoramaUrl != null)
+            _PanoramaViewer(
+              url: panoramaUrl,
+              onDismiss: () => setState(() => _panoramaUrl = null),
             ),
         ],
       ),
@@ -1089,7 +1293,7 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
       case MeshyGenerationStage.idle:
       case MeshyGenerationStage.ready:
       case MeshyGenerationStage.error:
-        return 'Generate model';
+        return _isWorldMode ? 'Generate world' : 'Generate model';
       case MeshyGenerationStage.missingProxyConfig:
         return 'Proxy required';
       case MeshyGenerationStage.submitting:
@@ -1112,9 +1316,11 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
     }
 
     final baseMessage = progressLabel == null
-        ? '${stageLabel ?? 'Meshy'} is still running upstream.'
-        : '${stageLabel ?? 'Meshy'} is $progressLabel complete.';
-    final statusMessage = rawStatus == null ? '' : ' Meshy status: $rawStatus.';
+        ? '${stageLabel ?? 'Generation'} is still running upstream.'
+        : '${stageLabel ?? 'Generation'} is $progressLabel complete.';
+    final statusMessage = rawStatus == null
+        ? ''
+        : ' Backend status: $rawStatus.';
     final staleMessage = updateAgeLabel == null
         ? ''
         : _isProgressUpdateStale
@@ -1306,6 +1512,12 @@ class MeshyPromptPanel extends StatelessWidget {
     this.isLoadingRecentModels = false,
     this.onSelectRecentModel,
     this.activeModelId,
+    this.kind = 'object',
+    this.onKindChanged,
+    this.imageBytes,
+    this.onPickImage,
+    this.worldSteps = 12,
+    this.onWorldStepsChanged,
   });
 
   final TextEditingController promptController;
@@ -1317,10 +1529,21 @@ class MeshyPromptPanel extends StatelessWidget {
   final ValueChanged<MeshyModelRecord>? onSelectRecentModel;
   final String? activeModelId;
 
+  /// `'object'` or `'world'`.
+  final String kind;
+  final ValueChanged<String>? onKindChanged;
+
+  /// The source photo. Both self-hosted generation models are image-conditioned.
+  final Uint8List? imageBytes;
+  final ValueChanged<ImageSource>? onPickImage;
+  final int worldSteps;
+  final ValueChanged<int>? onWorldStepsChanged;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final showRecentModels = isLoadingRecentModels || recentModels.isNotEmpty;
+    final isWorldMode = kind == 'world';
 
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -1367,11 +1590,61 @@ class MeshyPromptPanel extends StatelessWidget {
               const SizedBox(height: 16),
             ],
             Text(
-              'Meshy Prompt',
+              'Generation',
               style: theme.textTheme.titleMedium?.copyWith(
                 color: Colors.white,
                 fontWeight: FontWeight.w600,
               ),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              children: [
+                ChoiceChip(
+                  label: const Text('Object'),
+                  avatar: const Icon(Icons.view_in_ar_rounded, size: 18),
+                  selected: !isWorldMode,
+                  onSelected: onKindChanged == null
+                      ? null
+                      : (_) => onKindChanged!('object'),
+                ),
+                ChoiceChip(
+                  label: const Text('World'),
+                  avatar: const Icon(Icons.panorama_photosphere, size: 18),
+                  selected: isWorldMode,
+                  onSelected: onKindChanged == null
+                      ? null
+                      : (_) => onKindChanged!('world'),
+                ),
+              ],
+            ),
+            if (isWorldMode) ...[
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                children: [
+                  ChoiceChip(
+                    label: const Text('Fast · 12 steps'),
+                    selected: worldSteps == 12,
+                    onSelected: onWorldStepsChanged == null
+                        ? null
+                        : (_) => onWorldStepsChanged!(12),
+                  ),
+                  ChoiceChip(
+                    label: const Text('Quality · 40 steps'),
+                    selected: worldSteps == 40,
+                    onSelected: onWorldStepsChanged == null
+                        ? null
+                        : (_) => onWorldStepsChanged!(40),
+                  ),
+                ],
+              ),
+            ],
+            const SizedBox(height: 12),
+            _GenerationPhotoPicker(
+              kind: kind,
+              imageBytes: imageBytes,
+              onPick: onPickImage,
             ),
             const SizedBox(height: 12),
             TextField(
@@ -1381,7 +1654,9 @@ class MeshyPromptPanel extends StatelessWidget {
               textInputAction: TextInputAction.done,
               style: const TextStyle(color: Colors.white),
               decoration: InputDecoration(
-                hintText: 'Example: a carved jade fox statue',
+                hintText: isWorldMode
+                    ? 'Example: a sunlit alpine meadow at golden hour'
+                    : 'Name this object for your model history',
                 hintStyle: TextStyle(
                   color: Colors.white.withValues(alpha: 0.45),
                 ),
@@ -1425,6 +1700,145 @@ class MeshyPromptPanel extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Both models need a photo. Gallery sits next to the camera because the demo
+/// may run indoors.
+class _GenerationPhotoPicker extends StatelessWidget {
+  const _GenerationPhotoPicker({
+    required this.kind,
+    required this.imageBytes,
+    required this.onPick,
+  });
+
+  final String kind;
+  final Uint8List? imageBytes;
+  final ValueChanged<ImageSource>? onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final bytes = imageBytes;
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: SizedBox.square(
+            dimension: 64,
+            child: bytes == null
+                ? DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.22),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.12),
+                      ),
+                    ),
+                    child: Icon(
+                      Icons.image_outlined,
+                      color: Colors.white.withValues(alpha: 0.45),
+                    ),
+                  )
+                : Image.memory(bytes, fit: BoxFit.cover),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                bytes == null
+                    ? kind == 'world'
+                          ? 'Add a photo to expand into a 360 world.'
+                          : 'Add a photo to turn into a 3D object.'
+                    : 'Photo ready (${(bytes.length / 1024).round()} KB).',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: Colors.white.withValues(alpha: 0.82),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Wrap(
+                spacing: 8,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: onPick == null
+                        ? null
+                        : () => onPick!(ImageSource.camera),
+                    icon: const Icon(Icons.photo_camera_rounded, size: 18),
+                    label: const Text('Camera'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: onPick == null
+                        ? null
+                        : () => onPick!(ImageSource.gallery),
+                    icon: const Icon(Icons.photo_library_rounded, size: 18),
+                    label: const Text('Gallery'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// M2 stops here: the panorama is shown flat over the AR view. The inverted sky
+/// sphere is the next milestone.
+class _PanoramaViewer extends StatelessWidget {
+  const _PanoramaViewer({required this.url, required this.onDismiss});
+
+  final String url;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    return ColoredBox(
+      color: Colors.black,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          InteractiveViewer(
+            maxScale: 6,
+            child: Image.network(
+              url,
+              fit: BoxFit.contain,
+              errorBuilder: (context, error, stackTrace) => Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Text(
+                    'The panorama could not be loaded: $error',
+                    style: const TextStyle(color: Colors.white),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+              loadingBuilder: (context, child, progress) => progress == null
+                  ? child
+                  : const Center(child: CircularProgressIndicator()),
+            ),
+          ),
+          SafeArea(
+            child: Align(
+              alignment: Alignment.topRight,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: FilledButton.icon(
+                  onPressed: onDismiss,
+                  icon: const Icon(Icons.close_rounded),
+                  label: const Text('Dismiss'),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

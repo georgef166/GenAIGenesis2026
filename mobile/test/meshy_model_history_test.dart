@@ -136,7 +136,21 @@ void main() {
       },
     );
 
-    test('uses the original Meshy URL for Android persisted placement', () {
+    test('rejects a job id that is not filesystem and URL safe', () async {
+      expect(
+        () => store.cacheCompletedJob(
+          job: const MeshyGenerationJob(
+            jobId: '../../escape',
+            status: MeshyJobStatus.completed,
+            prompt: 'a traversal attempt',
+            glbUrl: 'https://example.com/escape.glb',
+          ),
+        ),
+        throwsA(isA<MeshyModelHistoryException>()),
+      );
+    });
+
+    test('falls back to the cached GLB on Android placement failure', () {
       final record = MeshyModelRecord(
         id: 'job-android',
         prompt: 'a bronze fox',
@@ -151,11 +165,14 @@ void main() {
         record,
         runtime: MeshyPlacementRuntime.android,
       );
+      final fallback = model.fallbackAfterPlacementFailure();
 
       expect(model.isPersisted, isTrue);
       expect(model.nodeType, NodeType.webGLB);
       expect(model.nodeUri, record.originalGlbUrl);
-      expect(model.hasRetryPlacementSource, isFalse);
+      expect(fallback, isNotNull);
+      expect(fallback!.nodeType, NodeType.fileSystemAppFolderGLB);
+      expect(fallback.nodeUri, record.localRelativePath);
     });
 
     test('uses cached local GLB first on iOS and can fall back to remote', () {

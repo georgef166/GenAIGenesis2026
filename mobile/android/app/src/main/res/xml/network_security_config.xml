@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">nixos</domain>
-    </domain-config>
+    <!--
+      The generation proxy runs on a laptop on the LAN over plain HTTP, and its
+      host is a build-time define, so it cannot be listed here. Dart's HttpClient
+      ignores this policy, but the plugin's native webGLB loader obeys it and
+      would otherwise refuse every asset URL.
+    -->
+    <base-config cleartextTrafficPermitted="true" />
 </network-security-config>
