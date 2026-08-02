@@ -13,7 +13,10 @@ import 'package:ar_flutter_plugin_2/managers/ar_session_manager.dart';
 import 'package:ar_flutter_plugin_2/models/ar_anchor.dart';
 import 'package:ar_flutter_plugin_2/models/ar_hittest_result.dart';
 import 'package:ar_flutter_plugin_2/models/ar_node.dart';
+import 'package:ar_flutter_plugin_2/models/hand_gesture_frame.dart';
 import 'package:flutter/material.dart';
+import 'package:genai/src/gesture_transform_math.dart';
+import 'package:genai/src/hand_gesture_interpreter.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:vector_math/vector_math_64.dart' hide Colors;
 
@@ -232,23 +235,77 @@ class _ARDiagramPageState extends State<ARDiagramPage>
   final List<ARNode> _flashcardNodes = <ARNode>[];
   final List<ARNode> _pointerLineNodes = <ARNode>[];
 
+  // Billboard rotation of each flashcard (parallel to _flashcardNodes).
+  final List<Quaternion> _cardRotations = <Quaternion>[];
+
+  // Precomputed pointer-line geometry (parallel to _pointerLineNodes).
+  final List<_PointerLineGeometry> _lineGeometries = <_PointerLineGeometry>[];
+
+  // Hand gesture controls
+  bool _gestureModeEnabled = false;
+  bool _gestureHintVisible = false;
+
+  /// Set once `setHandTracking` has reported the device cannot do it (iOS < 14,
+  /// MediaPipe model load failure, the historical `field platorm_ for s1.D`
+  /// protobuf fault). Touch drag/zoom below is always live, so this only
+  /// changes what the mode chip says.
+  bool _handTrackingUnavailable = false;
+  Timer? _gestureHintTimer;
+  HandGestureInterpreter? _gestureInterpreter;
+  final ValueNotifier<_HandOverlayModel> _handOverlay =
+      ValueNotifier(const _HandOverlayModel(
+    hands: [],
+    landmarkSets: [],
+    zooming: false,
+    statusText: '',
+  ));
+
+  // Touch drag/zoom
+  double _touchScaleAtStart = _initialDiagramScale;
+
+  // Diagram transform driven by gestures (anchor-local).
+  // At 1.0 the rocket is 1.2 m tall (matching the label offsets); 0.5 spawns
+  // it at a desk-friendly ~60 cm with everything scaled proportionally.
+  static const double _initialDiagramScale = 0.5;
+  Vector3 _diagramOffset = Vector3.zero();
+  double _diagramScale = _initialDiagramScale;
+  double _zoomScaleAtStart = _initialDiagramScale;
+  static const double _minDiagramScale = 0.2;
+  static const double _maxDiagramScale = 8.0;
+
+  // Poses cached from the billboard polling timer, reused by drag math.
+  Matrix4? _lastCameraPose;
+  Matrix4? _lastAnchorPose;
+
   // -------------------------------------------------------------------
   // Scale helpers
+  //
+  // Android (patched plugin): a node's scale value is the rendered size in
+  // meters of the model's largest dimension. iOS: values are raw-model
+  // multipliers carrying the plugin's 0.01 GLTF factor (hence the ×100
+  // compensation), which renders the same sizes for these assets.
   // -------------------------------------------------------------------
 
-  double get _rocketScaleBase {
-    return 0.012;
-  }
+  /// Rocket height at _diagramScale = 1. The label offsets in _kLabelSpecs
+  /// (pointer tips up to y = 1.02 m) are designed for this size.
+  Vector3 get _rocketScale => Platform.isIOS
+      ? Vector3.all(0.012 * _iosPluginModelScaleCompensation)
+      : Vector3.all(1.2);
 
-  double get _iosModelCompensation =>
-      Platform.isIOS ? _iosPluginModelScaleCompensation : 1.0;
+  /// Flashcards are 0.24 m wide at _diagramScale = 1.
+  Vector3 get _cardScale => Platform.isIOS
+      ? Vector3.all(_iosPluginModelScaleCompensation)
+      : Vector3.all(0.24);
 
-  Vector3 get _rocketScale {
-    final s = _rocketScaleBase * _iosModelCompensation;
-    return Vector3(s, s, s);
-  }
-
-  Vector3 get _cardScale => Vector3.all(_iosModelCompensation);
+  /// Pointer line: [lineLength] long, 8 mm thick, at _diagramScale = 1.
+  /// (dot.gltf is a ±1 cube, so on iOS a raw scale of l/2 spans l meters.)
+  Vector3 _lineScale(double lineLength) => Platform.isIOS
+      ? Vector3(
+          lineLength * 0.5 * _iosPluginModelScaleCompensation,
+          0.004 * _iosPluginModelScaleCompensation,
+          0.004 * _iosPluginModelScaleCompensation,
+        )
+      : Vector3(lineLength, 0.008, 0.008);
 
   // -------------------------------------------------------------------
   // Lifecycle
@@ -265,14 +322,24 @@ class _ARDiagramPageState extends State<ARDiagramPage>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _ensureCameraPermission(requestIfNeeded: false);
+      if (_rocketNode != null) {
+        unawaited(_enableGestureMode());
+      }
+    } else if (state == AppLifecycleState.paused) {
+      _disableGestureMode();
     }
   }
 
   @override
   void dispose() {
     _poseTimer?.cancel();
+    _gestureHintTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
+    if (_gestureModeEnabled) {
+      _sessionManager?.setHandTracking(false);
+    }
     _sessionManager?.dispose();
+    _handOverlay.dispose();
     super.dispose();
   }
 
@@ -355,6 +422,7 @@ class _ARDiagramPageState extends State<ARDiagramPage>
     sessionManager.onError = _handleSessionError;
     sessionManager.onPlaneDetected = _handlePlaneDetected;
     sessionManager.onPlaneOrPointTap = _handleTap;
+    sessionManager.onHandGesture = _handleHandGestureFrame;
 
     if (_isCameraPermissionGranted) {
       _initializeSession();
@@ -473,7 +541,7 @@ class _ARDiagramPageState extends State<ARDiagramPage>
       final node = ARNode(
         type: NodeType.localGLTF2,
         uri: _rocketModelAssetPath,
-        scale: _rocketScale,
+        scale: _rocketScale * _diagramScale,
         position: Vector3(0.0, 0.0, 0.0),
         rotation: Vector4(1.0, 0.0, 0.0, 0.0),
       );
@@ -521,6 +589,10 @@ class _ARDiagramPageState extends State<ARDiagramPage>
 
       // Start polling camera pose every ~33 ms (≈30 fps).
       _startPosePolling();
+
+      // Hand-gesture controls are on by default once the diagram is placed;
+      // the hand icon in the app bar toggles them off.
+      unawaited(_enableGestureMode());
     } catch (e) {
       if (!mounted) return;
       _setOverlay(_PlacementState.error, 'Failed to place the rocket: $e');
@@ -548,8 +620,224 @@ class _ARDiagramPageState extends State<ARDiagramPage>
       if (!mounted) return;
     }
 
+    _lastCameraPose = pose;
     if (anchorPose != null) {
+      _lastAnchorPose = anchorPose;
       await _updateBillboardsFromAnchorTransform(anchorPose);
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // Hand gesture controls
+  // -------------------------------------------------------------------
+
+  Future<void> _toggleGestureMode() async {
+    if (_gestureModeEnabled) {
+      await _disableGestureMode();
+      return;
+    }
+    await _enableGestureMode();
+  }
+
+  Future<void> _enableGestureMode() async {
+    if (_gestureModeEnabled || !mounted) return;
+
+    final sm = _sessionManager;
+    if (sm == null) {
+      debugPrint('HandGestures: cannot enable, session manager is null');
+      return;
+    }
+
+    final size = MediaQuery.of(context).size;
+    _gestureInterpreter = HandGestureInterpreter(
+      viewAspect: size.height > 0 ? size.width / size.height : 16 / 9,
+    );
+
+    debugPrint('HandGestures: requesting setHandTracking(true)');
+    final supported = await sm.setHandTracking(true);
+    debugPrint('HandGestures: setHandTracking returned $supported');
+    if (!mounted) return;
+    if (!supported) {
+      _gestureInterpreter = null;
+      setState(() {
+        _handTrackingUnavailable = true;
+        _gestureHintVisible = true;
+      });
+      _flashGestureHint();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Hand gestures are unavailable on this device — drag and pinch '
+            'with your fingers instead.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      _gestureModeEnabled = true;
+      _gestureHintVisible = true;
+    });
+    // Immediate feedback before the first detection tick arrives, so an
+    // enabled-but-silent tracker is visibly distinguishable from "off".
+    _handOverlay.value = const _HandOverlayModel(
+      hands: [],
+      landmarkSets: [],
+      zooming: false,
+      statusText: 'Hand tracking on — show a hand to the camera',
+    );
+    _flashGestureHint();
+  }
+
+  /// Shows the input-mode chip, then fades it out so it does not sit over the
+  /// AR scene forever.
+  void _flashGestureHint() {
+    _gestureHintTimer?.cancel();
+    _gestureHintTimer = Timer(const Duration(seconds: 4), () {
+      if (mounted) setState(() => _gestureHintVisible = false);
+    });
+  }
+
+  Future<void> _disableGestureMode() async {
+    if (!_gestureModeEnabled) return;
+    _gestureHintTimer?.cancel();
+    _gestureInterpreter = null;
+    _handOverlay.value = const _HandOverlayModel(
+      hands: [],
+      landmarkSets: [],
+      zooming: false,
+      statusText: '',
+    );
+    if (mounted) {
+      setState(() {
+        _gestureModeEnabled = false;
+        _gestureHintVisible = false;
+      });
+    } else {
+      _gestureModeEnabled = false;
+    }
+    await _sessionManager?.setHandTracking(false);
+  }
+
+  void _handleHandGestureFrame(HandGestureFrame frame) {
+    final interpreter = _gestureInterpreter;
+    if (!_gestureModeEnabled || interpreter == null || !mounted) return;
+
+    var zooming = _handOverlay.value.zooming;
+    for (final command in interpreter.ingest(frame)) {
+      switch (command) {
+        case DragStart():
+          break;
+        case DragUpdate(:final delta):
+          _applyDragDelta(delta);
+        case DragEnd():
+          break;
+        case ZoomStart():
+          _zoomScaleAtStart = _diagramScale;
+          zooming = true;
+        case ZoomUpdate(:final spanRatio):
+          _diagramScale = (_zoomScaleAtStart * spanRatio)
+              .clamp(_minDiagramScale, _maxDiagramScale);
+          _applyDiagramTransform();
+        case ZoomEnd():
+          zooming = false;
+      }
+    }
+
+    final ratios = frame.hands
+        .map((h) => h.pinchRatio.toStringAsFixed(2))
+        .join('  ');
+    _handOverlay.value = _HandOverlayModel(
+      hands: interpreter.indicators,
+      landmarkSets: frame.hands.map((h) => h.landmarks).toList(),
+      zooming: zooming,
+      statusText: frame.hands.isEmpty
+          ? 'No hands detected'
+          : '${frame.hands.length} hand${frame.hands.length == 1 ? '' : 's'}  '
+              'pinch: $ratios',
+    );
+  }
+
+  // -------------------------------------------------------------------
+  // Touch drag / zoom
+  // -------------------------------------------------------------------
+
+  void _onTouchScaleStart(ScaleStartDetails details) {
+    _touchScaleAtStart = _diagramScale;
+  }
+
+  void _onTouchScaleUpdate(ScaleUpdateDetails details, Size viewSize) {
+    if (details.scale != 1.0) {
+      _diagramScale = (_touchScaleAtStart * details.scale)
+          .clamp(_minDiagramScale, _maxDiagramScale);
+    }
+    final delta = details.focalPointDelta;
+    if (delta != Offset.zero && viewSize.width > 0 && viewSize.height > 0) {
+      _applyDragDelta(Offset(
+        delta.dx / viewSize.width,
+        delta.dy / viewSize.height,
+      ));
+    } else {
+      _applyDiagramTransform();
+    }
+  }
+
+  /// Moves the diagram in the camera-facing plane at its current distance.
+  void _applyDragDelta(Offset normDelta) {
+    final cameraPose = _lastCameraPose;
+    final anchorPose = _lastAnchorPose;
+    if (cameraPose == null || anchorPose == null) return;
+
+    final objectWorld = anchorPose.getTranslation() +
+        anchorPose.getRotation().transformed(_diagramOffset);
+    final distance =
+        (objectWorld - cameraPose.getTranslation()).length.clamp(0.3, 10.0);
+
+    _diagramOffset += computeAnchorLocalDelta(
+      cameraPose: cameraPose,
+      anchorPose: anchorPose,
+      normDelta: normDelta,
+      distance: distance,
+    );
+    _applyDiagramTransform();
+  }
+
+  /// Re-derives every node transform from [_diagramOffset] and
+  /// [_diagramScale]. All 13 nodes are siblings under the anchor, so cards
+  /// and pointer lines must be moved/scaled along with the rocket.
+  void _applyDiagramTransform() {
+    final rocketNode = _rocketNode;
+    if (rocketNode == null) return;
+    final scale = _diagramScale;
+
+    rocketNode.transform = Matrix4.compose(
+      _diagramOffset,
+      Quaternion.identity(),
+      _rocketScale * scale,
+    );
+
+    final cardCount = math.min(
+      math.min(_flashcardNodes.length, _cardRotations.length),
+      _labels.length,
+    );
+    for (var i = 0; i < cardCount; i++) {
+      _flashcardNodes[i].transform = Matrix4.compose(
+        _diagramOffset + _labels[i].labelOffset * scale,
+        _cardRotations[i],
+        _cardScale * scale,
+      );
+    }
+
+    final lineCount =
+        math.min(_pointerLineNodes.length, _lineGeometries.length);
+    for (var i = 0; i < lineCount; i++) {
+      final geometry = _lineGeometries[i];
+      _pointerLineNodes[i].transform = Matrix4.compose(
+        _diagramOffset + geometry.center * scale,
+        geometry.rotation,
+        geometry.baseScale * scale,
+      );
     }
   }
 
@@ -559,6 +847,11 @@ class _ARDiagramPageState extends State<ARDiagramPage>
 
   Future<void> _reset() async {
     _poseTimer?.cancel();
+    await _disableGestureMode();
+    _diagramOffset = Vector3.zero();
+    _diagramScale = _initialDiagramScale;
+    _zoomScaleAtStart = _initialDiagramScale;
+    _lastAnchorPose = null;
     final om = _objectManager;
     final am = _anchorManager;
     final node = _rocketNode;
@@ -574,10 +867,14 @@ class _ARDiagramPageState extends State<ARDiagramPage>
         om?.removeNode(cardNode);
       }
       _flashcardNodes.clear();
+      _cardRotations.clear();
+      _lineGeometries.clear();
 
       if (node != null) om?.removeNode(node);
       if (anchor != null) am?.removeAnchor(anchor);
-    } catch (_) {}
+    } catch (_) {
+      // Ignore cleanup errors and return the UI to placement mode anyway.
+    }
 
     if (!mounted) return;
     setState(() {
@@ -602,13 +899,15 @@ class _ARDiagramPageState extends State<ARDiagramPage>
 
     _flashcardNodes.clear();
     _pointerLineNodes.clear();
+    _cardRotations.clear();
+    _lineGeometries.clear();
 
     for (final label in _labels) {
       final cardNode = ARNode(
         type: NodeType.localGLTF2,
         uri: label.assetPath,
-        scale: _cardScale,
-        position: label.labelOffset,
+        scale: _cardScale * _diagramScale,
+        position: label.labelOffset * _diagramScale,
         rotation: Vector4(0.0, 1.0, 0.0, 0.0),
       );
 
@@ -622,6 +921,7 @@ class _ARDiagramPageState extends State<ARDiagramPage>
       }
 
       _flashcardNodes.add(cardNode);
+      _cardRotations.add(Quaternion.identity());
 
       final lineVector = label.pointerTarget - label.labelOffset;
       final lineLength = lineVector.length;
@@ -639,12 +939,8 @@ class _ARDiagramPageState extends State<ARDiagramPage>
       final lineNode = ARNode(
         type: NodeType.localGLTF2,
         uri: 'assets/models/dot.gltf',
-        scale: Vector3(
-          (lineLength * 0.5) * _iosModelCompensation,
-          0.004 * _iosModelCompensation,
-          0.004 * _iosModelCompensation,
-        ),
-        position: lineCenter,
+        scale: _lineScale(lineLength) * _diagramScale,
+        position: lineCenter * _diagramScale,
         rotation: lineRotation,
       );
 
@@ -655,6 +951,13 @@ class _ARDiagramPageState extends State<ARDiagramPage>
 
       if (didAddLine ?? false) {
         _pointerLineNodes.add(lineNode);
+        _lineGeometries.add(
+          _PointerLineGeometry(
+            center: lineCenter,
+            rotation: _quaternionFromTo(Vector3(1.0, 0.0, 0.0), lineDirection),
+            baseScale: _lineScale(lineLength),
+          ),
+        );
       }
     }
 
@@ -671,7 +974,7 @@ class _ARDiagramPageState extends State<ARDiagramPage>
       return;
     }
 
-    final cameraPose = await sessionManager.getCameraPose();
+    final cameraPose = _lastCameraPose ?? await sessionManager.getCameraPose();
     if (cameraPose == null || !mounted) {
       return;
     }
@@ -687,10 +990,16 @@ class _ARDiagramPageState extends State<ARDiagramPage>
       cameraLocalV4.z,
     );
 
-    for (var index = 0; index < _flashcardNodes.length; index++) {
+    final cardCount = math.min(
+      math.min(_flashcardNodes.length, _cardRotations.length),
+      _labels.length,
+    );
+    for (var index = 0; index < cardCount; index++) {
       final label = _labels[index];
       final cardNode = _flashcardNodes[index];
-      final toCamera = cameraLocal - label.labelOffset;
+      final effectiveOffset =
+          _diagramOffset + label.labelOffset * _diagramScale;
+      final toCamera = cameraLocal - effectiveOffset;
       if (toCamera.length <= 0.0001) {
         continue;
       }
@@ -699,7 +1008,12 @@ class _ARDiagramPageState extends State<ARDiagramPage>
         Vector3(0.0, 0.0, 1.0),
         toCamera.normalized(),
       );
-      cardNode.rotationFromQuaternion = cardRotation;
+      _cardRotations[index] = cardRotation;
+      cardNode.transform = Matrix4.compose(
+        effectiveOffset,
+        cardRotation,
+        _cardScale * _diagramScale,
+      );
     }
   }
 
@@ -810,6 +1124,7 @@ class _ARDiagramPageState extends State<ARDiagramPage>
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppBar(
+        automaticallyImplyLeading: false,
         backgroundColor: Colors.transparent,
         elevation: 0,
         iconTheme: const IconThemeData(color: Colors.white),
@@ -817,6 +1132,23 @@ class _ARDiagramPageState extends State<ARDiagramPage>
           'Saturn V Diagram',
           style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
         ),
+        actions: [
+          if (_state == _PlacementState.placed)
+            IconButton(
+              tooltip: _gestureModeEnabled
+                  ? 'Disable hand gestures'
+                  : 'Control with hand gestures',
+              onPressed: _toggleGestureMode,
+              icon: Icon(
+                _gestureModeEnabled
+                    ? Icons.back_hand
+                    : Icons.back_hand_outlined,
+                color: _gestureModeEnabled
+                    ? Theme.of(context).colorScheme.primary
+                    : Colors.white,
+              ),
+            ),
+        ],
       ),
       body: Stack(
         fit: StackFit.expand,
@@ -829,6 +1161,61 @@ class _ARDiagramPageState extends State<ARDiagramPage>
             ARView(
               onARViewCreated: _onARViewCreated,
               planeDetectionConfig: PlaneDetectionConfig.horizontal,
+            ),
+
+          // Touch drag/zoom (once placed; taps are ignored after placement
+          // anyway, so intercepting the AR view's touches is safe here).
+          if (_state == _PlacementState.placed)
+            Positioned.fill(
+              child: LayoutBuilder(
+                builder: (context, constraints) => GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onScaleStart: _onTouchScaleStart,
+                  onScaleUpdate: (details) =>
+                      _onTouchScaleUpdate(details, constraints.biggest),
+                ),
+              ),
+            ),
+
+          // Hand gesture indicators
+          if (_gestureModeEnabled)
+            ValueListenableBuilder<_HandOverlayModel>(
+              valueListenable: _handOverlay,
+              builder: (context, model, _) => IgnorePointer(
+                child: CustomPaint(
+                  painter: _HandOverlayPainter(
+                    model: model,
+                    accentColor: Theme.of(context).colorScheme.primary,
+                  ),
+                  size: Size.infinite,
+                ),
+              ),
+            ),
+
+          // Input-mode chip: says which of the two paths into
+          // _applyDragDelta/_diagramScale is live.
+          if (_gestureModeEnabled || _handTrackingUnavailable)
+            Align(
+              alignment: Alignment.bottomCenter,
+              child: SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 24),
+                  child: AnimatedOpacity(
+                    opacity: _gestureHintVisible ? 1.0 : 0.0,
+                    duration: const Duration(milliseconds: 400),
+                    child: _Chip(
+                      label: _gestureModeEnabled
+                          ? 'Hand gestures active · pinch to grab, two hands '
+                                'to zoom'
+                          : 'Touch mode — hand tracking unavailable · drag to '
+                                'move, pinch to zoom',
+                      icon: _gestureModeEnabled
+                          ? Icons.back_hand_outlined
+                          : Icons.touch_app_outlined,
+                    ),
+                  ),
+                ),
+              ),
             ),
 
           // HUD
@@ -869,6 +1256,152 @@ class _ARDiagramPageState extends State<ARDiagramPage>
       ),
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// Hand gesture overlay
+// ---------------------------------------------------------------------------
+
+/// Precomputed anchor-local geometry of a pointer line, captured at add time
+/// so gesture transforms are pure arithmetic.
+class _PointerLineGeometry {
+  _PointerLineGeometry({
+    required this.center,
+    required this.rotation,
+    required this.baseScale,
+  });
+
+  final Vector3 center;
+  final Quaternion rotation;
+  final Vector3 baseScale;
+}
+
+class _HandOverlayModel {
+  const _HandOverlayModel({
+    required this.hands,
+    required this.landmarkSets,
+    required this.zooming,
+    required this.statusText,
+  });
+
+  final List<HandIndicator> hands;
+
+  /// Raw 21-point landmark sets per detected hand (view-normalized), for
+  /// verifying that hand tracking works and maps to the right screen spots.
+  final List<List<Offset>> landmarkSets;
+  final bool zooming;
+  final String statusText;
+}
+
+/// Bone connections between MediaPipe hand-landmark indices.
+const List<List<int>> _kHandConnections = [
+  [0, 1], [1, 2], [2, 3], [3, 4], // thumb
+  [0, 5], [5, 6], [6, 7], [7, 8], // index
+  [5, 9], [9, 10], [10, 11], [11, 12], // middle
+  [9, 13], [13, 14], [14, 15], [15, 16], // ring
+  [13, 17], [17, 18], [18, 19], [19, 20], [0, 17], // pinky + palm
+];
+
+class _HandOverlayPainter extends CustomPainter {
+  _HandOverlayPainter({required this.model, required this.accentColor});
+
+  final _HandOverlayModel model;
+  final Color accentColor;
+
+  bool _valid(Offset p) => p.dx >= 0 && p.dy >= 0;
+
+  void _paintLandmarks(Canvas canvas, Size size) {
+    final bonePaint = Paint()
+      ..color = Colors.greenAccent.withValues(alpha: 0.8)
+      ..strokeWidth = 2;
+    final jointPaint = Paint()..color = Colors.greenAccent;
+    final tipPaint = Paint()..color = Colors.orangeAccent;
+
+    for (final landmarks in model.landmarkSets) {
+      if (landmarks.length < 21) continue;
+      final points = landmarks
+          .map((p) => Offset(p.dx * size.width, p.dy * size.height))
+          .toList();
+
+      for (final bone in _kHandConnections) {
+        final a = landmarks[bone[0]];
+        final b = landmarks[bone[1]];
+        if (_valid(a) && _valid(b)) {
+          canvas.drawLine(points[bone[0]], points[bone[1]], bonePaint);
+        }
+      }
+      for (var i = 0; i < 21; i++) {
+        if (!_valid(landmarks[i])) continue;
+        // Thumb tip (4) and index tip (8) drive the pinch — highlight them.
+        final isPinchTip = i == 4 || i == 8;
+        canvas.drawCircle(
+          points[i],
+          isPinchTip ? 6 : 3.5,
+          isPinchTip ? tipPaint : jointPaint,
+        );
+      }
+    }
+  }
+
+  void _paintStatusText(Canvas canvas, Size size) {
+    if (model.statusText.isEmpty) return;
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: model.statusText,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+          shadows: [Shadow(color: Colors.black, blurRadius: 4)],
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: size.width - 32);
+    textPainter.paint(canvas, Offset(16, size.height - 40));
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    _paintLandmarks(canvas, size);
+    _paintStatusText(canvas, size);
+    final centers = <Offset>[];
+    for (final hand in model.hands) {
+      centers.add(Offset(
+        hand.position.dx * size.width,
+        hand.position.dy * size.height,
+      ));
+    }
+
+    if (model.zooming && centers.length >= 2) {
+      final linePaint = Paint()
+        ..color = accentColor.withValues(alpha: 0.7)
+        ..strokeWidth = 2;
+      canvas.drawLine(centers[0], centers[1], linePaint);
+    }
+
+    for (var i = 0; i < centers.length; i++) {
+      final hand = model.hands[i];
+      final center = centers[i];
+      if (hand.isPinching) {
+        final glowPaint = Paint()
+          ..color = accentColor.withValues(alpha: 0.35)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10);
+        canvas.drawCircle(center, 18, glowPaint);
+        final fillPaint = Paint()..color = accentColor;
+        canvas.drawCircle(center, 12, fillPaint);
+      } else {
+        final ringPaint = Paint()
+          ..color = Colors.white.withValues(alpha: 0.85)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 3;
+        canvas.drawCircle(center, 16, ringPaint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _HandOverlayPainter oldDelegate) =>
+      oldDelegate.model != model || oldDelegate.accentColor != accentColor;
 }
 
 // ---------------------------------------------------------------------------

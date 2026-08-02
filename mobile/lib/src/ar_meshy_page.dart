@@ -29,6 +29,15 @@ const _jobPollInterval = Duration(seconds: 3);
 const _maxPollFailures = 5;
 const _maxPollRetryBackoff = Duration(seconds: 15);
 
+/// Wall-clock ceiling on one generation, independent of poll failures: a job
+/// the backend silently wedged never reports an error, so nothing else ends
+/// the loop.
+const _jobPollDeadline = Duration(minutes: 15);
+
+/// Rendered size in metres of the model's largest dimension on Android — the
+/// plugin normalizes every model to 1 m at load and multiplies by the node
+/// scale (`third_party/ar_flutter_plugin_2/PATCHES.md`, patch 7). iOS applies
+/// the raw matrix, hence the [_iosPluginModelScaleCompensation] factor there.
 const _generatedModelScale = 0.14;
 
 /// The vendored plugin's iOS side scales every GLTF child by 0.01, so every
@@ -309,7 +318,7 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
       case MeshyGenerationStage.error:
         return _generationErrorMessage ?? 'Generation failed.';
       case MeshyGenerationStage.idle:
-        return 'Run the proxy on your computer at http://nixos:8080. '
+        return 'Run the proxy on your computer at $defaultProxyBaseUrl. '
             'Use --dart-define=MESHY_PROXY_BASE_URL=http://<LAN-IP>:8080 '
             'to override it.';
     }
@@ -793,9 +802,19 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
       return;
     }
 
+    final deadline = DateTime.now().add(_jobPollDeadline);
     var consecutiveFailures = 0;
 
     while (_isCurrentGeneration(generationToken)) {
+      if (DateTime.now().isAfter(deadline)) {
+        _setGenerationError(
+          generationToken,
+          'The backend did not finish within ${_jobPollDeadline.inMinutes} '
+          'minutes. Try again with a simpler prompt.',
+        );
+        return;
+      }
+
       final MeshyGenerationJob job;
       try {
         job = await client.getJob(jobId);
@@ -1193,6 +1212,7 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _modelHistoryStore.close();
     _sessionManager?.dispose();
+    _meshyClient?.close();
     super.dispose();
   }
 
@@ -1208,6 +1228,7 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppBar(
+        automaticallyImplyLeading: false,
         backgroundColor: Colors.transparent,
         elevation: 0,
         iconTheme: const IconThemeData(color: Colors.white),

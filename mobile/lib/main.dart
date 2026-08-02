@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'src/ar_meshy_page.dart';
 import 'src/ar_rocket_page.dart';
@@ -13,7 +14,12 @@ const _backgroundColor = Color(0xFF02040a);
 const _primaryColor = Color(0xFF00ffff);
 const _lightColor = Color(0xFF80ffde);
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await SystemChrome.setPreferredOrientations([
+    DeviceOrientation.landscapeLeft,
+    DeviceOrientation.landscapeRight,
+  ]);
   runApp(const GenaiApp());
 }
 
@@ -23,7 +29,7 @@ class GenaiApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'GenAI AR',
+      title: 'Voxel',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
@@ -42,10 +48,10 @@ class GenaiApp extends StatelessWidget {
           ),
         ),
         textTheme: Theme.of(context).textTheme.apply(
-              fontFamily: 'RobotoMono',
-              bodyColor: _lightColor,
-              displayColor: Colors.white,
-            ),
+          fontFamily: 'RobotoMono',
+          bodyColor: _lightColor,
+          displayColor: Colors.white,
+        ),
       ),
       home: const HomePage(),
     );
@@ -59,160 +65,175 @@ class GenaiApp extends StatelessWidget {
 class HomePage extends StatelessWidget {
   const HomePage({super.key});
 
+  void _openScreen(BuildContext context, Widget child) {
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => _TopRightBackShell(child: child)));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('GENAI AR EXPERIENCES')),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Icon(
-                Icons.view_in_ar_rounded,
-                size: 80,
-                color: _primaryColor,
-              ),
-              const SizedBox(height: 32),
-              Text(
-                'Choose a Holo-interface',
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 1.1,
+      body: SafeArea(
+        child: Stack(
+          children: [
+            Positioned(
+              top: 8,
+              right: 0,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 235, minWidth: 210),
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.2),
+                    border: Border.all(
+                      color: _primaryColor.withValues(alpha: 0.3),
                     ),
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(10),
+                      bottomRight: Radius.circular(10),
+                    ),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _MenuButton(
+                        title: 'AI Model Generator',
+                        icon: Icons.auto_awesome_rounded,
+                        onTap: () {
+                          _openScreen(context, const ARMeshyPage());
+                        },
+                      ),
+                      const SizedBox(height: 6),
+                      _MenuButton(
+                        title: 'Saturn V Rocket Explorer',
+                        icon: Icons.rocket_launch_rounded,
+                        onTap: () {
+                          _openScreen(context, const ARRocketPage());
+                        },
+                      ),
+                      const SizedBox(height: 6),
+                      _MenuButton(
+                        title: 'Saturn V Diagram',
+                        icon: Icons.schema_rounded,
+                        onTap: () {
+                          _openScreen(context, const ARDiagramPage());
+                        },
+                      ),
+                      const SizedBox(height: 6),
+                      _MenuButton(
+                        title: 'AI Topic Research',
+                        icon: Icons.menu_book_rounded,
+                        onTap: () {
+                          _openScreen(context, const ResearchScreen());
+                        },
+                      ),
+                    ],
+                  ),
+                ),
               ),
-              const SizedBox(height: 48),
-              _FeatureCard(
-                title: 'AI Model Generator',
-                subtitle: 'Generate 3D objects with Meshy and place them in AR',
-                icon: Icons.auto_awesome_rounded,
-                onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const ARMeshyPage()),
-                  );
-                },
+            ),
+            Align(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Voxel',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.displayMedium?.copyWith(
+                      color: _primaryColor.withValues(alpha: 0.96),
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'GenAI AR Learning',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      color: _lightColor.withValues(alpha: 0.92),
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.8,
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 16),
-              _FeatureCard(
-                title: 'Saturn V Rocket Explorer',
-                subtitle: "Examine NASA's Saturn V rocket in detailed AR",
-                icon: Icons.rocket_launch_rounded,
-                onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const ARRocketPage()),
-                  );
-                },
-              ),
-              const SizedBox(height: 16),
-              _FeatureCard(
-                title: 'Saturn V Diagram',
-                subtitle:
-                    'Museum-style AR educational labels for each rocket section',
-                icon: Icons.schema_rounded,
-                onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const ARDiagramPage()),
-                  );
-                },
-              ),
-              const SizedBox(height: 16),
-              _FeatureCard(
-                title: 'AI Topic Research',
-                subtitle: 'Create kid-friendly fun facts from a single topic',
-                icon: Icons.menu_book_rounded,
-                onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const ResearchScreen()),
-                  );
-                },
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
   }
 }
 
-class _FeatureCard extends StatelessWidget {
-  const _FeatureCard({
-    required this.title,
-    required this.subtitle,
-    required this.icon,
-    required this.onTap,
-  });
+class _TopRightBackShell extends StatelessWidget {
+  const _TopRightBackShell({required this.child});
 
-  final String title;
-  final String subtitle;
-  final IconData icon;
-  final VoidCallback onTap;
+  final Widget child;
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      color: Colors.black.withValues(alpha: 0.25),
-      elevation: 0,
-      shape: BeveledRectangleBorder(
-        borderRadius: const BorderRadius.only(
-          topLeft: Radius.circular(16),
-          bottomRight: Radius.circular(16),
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        child,
+        SafeArea(
+          child: Align(
+            alignment: Alignment.topRight,
+            child: _MenuButton(
+              title: 'Back',
+              icon: Icons.arrow_back_rounded,
+              onTap: () => Navigator.of(context).maybePop(),
+              width: 108,
+            ),
+          ),
         ),
-        side: BorderSide(color: _primaryColor.withValues(alpha: 0.4)),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        splashColor: _primaryColor.withValues(alpha: 0.2),
-        highlightColor: _primaryColor.withValues(alpha: 0.1),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(color: _lightColor.withValues(alpha: 0.5)),
-                  boxShadow: [
-                    BoxShadow(
-                      color: _primaryColor.withValues(alpha: 0.3),
-                      blurRadius: 8,
-                      spreadRadius: 2,
-                    ),
-                  ],
-                ),
-                child: Icon(icon, size: 28, color: _lightColor),
-              ),
-              const SizedBox(width: 20),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w600,
-                            letterSpacing: 1.1,
-                          ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      subtitle,
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                            color: _lightColor.withValues(alpha: 0.8),
-                          ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 12),
-              Icon(Icons.chevron_right_rounded, color: _primaryColor),
-            ],
+      ],
+    );
+  }
+}
+
+class _MenuButton extends StatelessWidget {
+  const _MenuButton({
+    required this.title,
+    required this.icon,
+    required this.onTap,
+    this.width,
+  });
+
+  final String title;
+  final IconData icon;
+  final VoidCallback onTap;
+  final double? width;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 42,
+      width: width ?? double.infinity,
+      child: FilledButton.icon(
+        onPressed: onTap,
+        style: FilledButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          backgroundColor: _primaryColor.withValues(alpha: 0.92),
+          foregroundColor: Colors.black,
+          alignment: Alignment.centerLeft,
+          shape: const BeveledRectangleBorder(
+            borderRadius: BorderRadius.only(
+              topLeft: Radius.circular(8),
+              bottomRight: Radius.circular(8),
+            ),
+          ),
+        ),
+        icon: Icon(icon, size: 14),
+        label: Text(
+          title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.3,
           ),
         ),
       ),

@@ -3,6 +3,12 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+/// Used when `MESHY_PROXY_BASE_URL` is not supplied via `--dart-define`.
+///
+/// This only resolves for emulator/desktop runs. A physical device must pass
+/// the dev machine's LAN address explicitly.
+const defaultProxyBaseUrl = 'http://localhost:8080';
+
 class MeshyProxyConfiguration {
   const MeshyProxyConfiguration._({required this.client, required this.error});
 
@@ -18,7 +24,7 @@ class MeshyProxyConfiguration {
     final trimmed = rawValue?.trim() ?? '';
     if (trimmed.isEmpty) {
       return MeshyProxyConfiguration._(
-        client: MeshyProxyClient(baseUri: Uri.parse('http://nixos:8080')),
+        client: MeshyProxyClient(baseUri: Uri.parse(defaultProxyBaseUrl)),
         error: null,
       );
     }
@@ -34,7 +40,7 @@ class MeshyProxyConfiguration {
         client: null,
         error:
             'MESHY_PROXY_BASE_URL must be an absolute http(s) URL such as '
-            'http://nixos:8080.',
+            '$defaultProxyBaseUrl.',
       );
     }
 
@@ -61,6 +67,9 @@ class MeshyProxyClient {
   final HttpClient _httpClient;
 
   Uri get baseUri => _baseUri;
+
+  /// Releases the underlying connection pool. Safe to call more than once.
+  void close() => _httpClient.close(force: true);
 
   /// [kind] is `'object'` or `'world'`. Both self-hosted models require
   /// [imageBytes]; [steps] only applies to worlds.
@@ -173,6 +182,9 @@ class MeshyProxyClient {
   }
 }
 
+/// Hand-mirrored from the proxy's `MeshyJobStatus`. Parsed by `.byName`, so a
+/// value renamed on either side must be renamed on both — deliberately loud:
+/// an unrecognised status throws rather than being silently tolerated.
 enum MeshyJobStatus { submitting, previewing, refining, completed, error }
 
 class MeshyGenerationJob {

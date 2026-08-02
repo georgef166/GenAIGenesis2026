@@ -73,9 +73,19 @@ only and must never reach the app: the phone cannot route to them.
 
 The three AR pages each own a full copy of the same lifecycle, deliberately duplicated rather than shared: camera permission via `permission_handler` → `ARView` callback wires the four plugin managers (`ARSessionManager`, `ARObjectManager`, `ARAnchorManager`, `ARLocationManager`) → plane-detection callback → tap runs a hit test → `ARPlaneAnchor` + `ARNode`. Each drives a page-local `enum` state machine (`ARPlacementState` / `ARSessionState`) that feeds a status overlay widget. Changing placement behaviour in one page does **not** change the others; fix all three when the change is cross-cutting.
 
-### The iOS scale trap
+The app is **landscape-locked** (`SystemChrome.setPreferredOrientations` in `main()` plus `android:screenOrientation="landscape"` in the manifest). The plugin's camera-orientation patches assume this; see `PATCHES.md` patches 1 and 3. Every AR page's `AppBar` sets `automaticallyImplyLeading: false` because `_TopRightBackShell` in `main.dart` draws its own Back button.
 
-The vendored plugin's iOS side multiplies every GLTF child node by 0.01. All three AR pages compensate with `_iosPluginModelScaleCompensation = 100.0` applied only when `Platform.isIOS`. Any new `NodeType.localGLTF2` node needs the same treatment or it will be invisible on iOS and correctly sized on Android.
+### The two scale traps
+
+**iOS.** The vendored plugin's iOS side multiplies every GLTF child node by 0.01. All three AR pages compensate with `_iosPluginModelScaleCompensation = 100.0` applied only when `Platform.isIOS`. Any new `NodeType.localGLTF2` node needs the same treatment or it will be invisible on iOS and correctly sized on Android.
+
+**Android.** Patch 7 changed the semantics: the plugin now normalizes every model to 1 m at load and applies the full transform matrix, so **a node scale of S means S metres of the model's largest dimension**, identical at spawn and on every update. Upstream instead read `matrix[0]` as `scaleToUnits` and dropped position and rotation entirely. Page constants were retuned for this (`_generatedModelScale = 0.14` → a 14 cm object; the diagram page's rocket is `Vector3.all(1.2)`). iOS is unaffected — it applies the raw matrix.
+
+### Hand gestures
+
+`ar_diagram_page.dart` can drive the placed diagram with hand gestures. ARCore owns the camera exclusively, so detection runs **inside the plugin** on the live AR frame — MediaPipe Hand Landmarker on Android (`tasks-vision`, bundled `hand_landmarker.task`, coordinates mapped through `Frame.transformCoordinates2d`), Apple Vision on iOS 14+. The channel contract is `setHandTracking {enabled} -> bool` and an `onHandGesture` frame at ~15 Hz (`PATCHES.md` patch 6). `src/hand_gesture_interpreter.dart` turns those frames into `GestureCommand`s (a hysteresis state machine, idle → dragging → zooming) and `src/gesture_transform_math.dart` converts a normalized screen delta into an anchor-local one. Both feed `_applyDragDelta` / `_diagramScale` → `_applyDiagramTransform`, which re-derives all 13 sibling node transforms so cards and pointer lines move with the rocket.
+
+**Touch is the fallback and is always live.** A `GestureDetector` (a single scale recognizer covers one-finger drag and two-finger pinch) sits over the AR view once placed and calls the *same* `_applyDragDelta` / `_diagramScale` code, so a device where `setHandTracking` returns false still moves and zooms — a real risk, since the historical MediaPipe protobuf fault (`field platorm_ for s1.D not found`) is unmitigated. A chip at the bottom of the screen names the active mode. Scope is drag + zoom only; all three pages keep `handlePans: false, handleRotation: false`, and **must** — patch 4 warns that `handlePans: true` enables native touch-drag and `isPositionEditable`, which fight the programmatic transforms both input paths rely on.
 
 ### Generation pipeline
 
@@ -129,6 +139,8 @@ Two things here are load-bearing and easy to undo by accident: the download uses
 
 ### Assets
 
-`mobile/plugins/ar_flutter_plugin_2/` is a vendored fork checked into git and referenced as a path dependency — edits there affect the build directly. AR label cards under `assets/models/flashcards/` are pre-baked textured GLTF quads (one per rocket section); there is no runtime text-to-texture rendering. `rocket_parts.dart` holds the educational copy as a `const` list.
+`mobile/third_party/ar_flutter_plugin_2/` is a vendored fork of pub.dev `ar_flutter_plugin_2` 0.0.3, checked into git and referenced as a path dependency — edits there affect the build directly. Its `PATCHES.md` documents all seven local patches and is the only record of them; read it before touching the plugin or re-syncing upstream. `mobile/analysis_options.yaml` excludes `third_party/**`, so upstream's lint warnings stay out of `flutter analyze`. There is exactly one vendored copy — the older `mobile/plugins/` path is gone.
+
+AR label cards under `assets/models/flashcards/` are pre-baked textured GLTF quads (one per rocket section); there is no runtime text-to-texture rendering. `rocket_parts.dart` holds the educational copy as a `const` list.
 
 Android `minSdk` is 28 and the manifest declares `android.hardware.camera.ar` as required.

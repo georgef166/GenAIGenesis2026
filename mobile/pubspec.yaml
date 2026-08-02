@@ -1,5 +1,5 @@
 name: genai
-description: "AR Rocket Explorer — place a 3-D rocket on any flat surface and learn about each part."
+description: "Voxel — GenAI AR Learning experiences in an interactive AR app."
 publish_to: 'none'
 
 version: 1.0.0+1
@@ -10,8 +10,10 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # Vendored fork of ar_flutter_plugin_2 0.0.3. See
+  # third_party/ar_flutter_plugin_2/PATCHES.md for what was changed and why.
   ar_flutter_plugin_2:
-    path: plugins/ar_flutter_plugin_2
+    path: third_party/ar_flutter_plugin_2
   audioplayers: ^6.1.0
   cupertino_icons: ^1.0.8
   path_provider: ^2.1.5
@@ -30,12 +32,18 @@ flutter:
 
   assets:
     - assets/models/dot.gltf
+    - assets/models/dot.bin
     - assets/models/cloud.gltf
+    - assets/models/cloud.bin
     - assets/models/flame_sprite.gltf
+    - assets/models/flame_sprite.bin
     - assets/models/flame_sprite.png
     - assets/models/flame_cone.gltf
+    - assets/models/flame_cone.bin
     - assets/models/flame_inner.gltf
+    - assets/models/flame_inner.bin
     - assets/models/smoke_plume.gltf
+    - assets/models/smoke_plume.bin
     - assets/models/flashcards/
     - assets/models/saturn_v_-_nasa/
     - assets/models/saturn_v_-_nasa/textures/

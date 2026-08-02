@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
     <!--
+      DEV ONLY. Remove before shipping a release build.
+
       The generation proxy runs on a laptop on the LAN over plain HTTP, and its
       host is a build-time define, so it cannot be listed here. Dart's HttpClient
       ignores this policy, but the plugin's native webGLB loader obeys it and
