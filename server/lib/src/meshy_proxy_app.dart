@@ -13,15 +13,21 @@ class MeshyProxyApp {
     Duration? pollInterval,
     Duration? stageTimeout,
     Duration? pollRetryBackoff,
+    Duration? jobRetention,
   }) : _meshyApi = meshyApi,
        _objectApi = objectApi,
        _pollInterval = pollInterval ?? const Duration(seconds: 5),
        _stageTimeout = stageTimeout ?? const Duration(minutes: 12),
-       _pollRetryBackoff = pollRetryBackoff ?? const Duration(seconds: 2);
+       _pollRetryBackoff = pollRetryBackoff ?? const Duration(seconds: 2),
+       _jobRetention = jobRetention ?? const Duration(minutes: 30);
 
   /// Decoded size cap for an uploaded photo. The phone downscales before it
   /// uploads; anything past this is either a bug or an attack.
   static const _maxImageBytes = 8 * 1024 * 1024;
+
+  /// Upper bound on an accepted prompt. The photo is already capped; without
+  /// this a caller could still park megabytes of text per job in `_jobs`.
+  static const _maxPromptLength = 1000;
   static const _minSteps = 10;
   static const _maxSteps = 60;
 
@@ -36,6 +42,7 @@ class MeshyProxyApp {
   final Duration _pollInterval;
   final Duration _stageTimeout;
   final Duration _pollRetryBackoff;
+  final Duration _jobRetention;
   final Map<String, MeshyJob> _jobs = <String, MeshyJob>{};
   final Map<String, Future<void>> _runningJobs = <String, Future<void>>{};
   final Random _random = Random.secure();
@@ -113,6 +120,12 @@ class MeshyProxyApp {
         'error': 'The "prompt" field must be a non-empty string.',
       });
     }
+    if (prompt.length > _maxPromptLength) {
+      return _jsonResponse(HttpStatus.badRequest, <String, Object?>{
+        'error':
+            'The "prompt" field must be at most $_maxPromptLength characters.',
+      });
+    }
 
     final rawKind = payload['kind'];
     final kind = rawKind == null
@@ -167,6 +180,8 @@ class MeshyProxyApp {
         });
       }
     }
+
+    _evictStaleJobs();
 
     final jobId = _nextJobId();
     final now = DateTime.now().toUtc();
@@ -354,7 +369,11 @@ class MeshyProxyApp {
         meshyError: completedTask.errorMessage,
         error: null,
       );
-    } catch (error) {
+    } catch (error, stackTrace) {
+      // The client only ever sees the normalized message now, so this is the
+      // one place the real failure survives. Never drop the stack trace.
+      stderr.writeln('[meshy] job=$jobId failed: $error');
+      stderr.writeln(stackTrace);
       _updateJob(
         jobId,
         status: MeshyJobStatus.error,
@@ -507,6 +526,19 @@ class MeshyProxyApp {
     );
   }
 
+  /// Drops finished jobs the app has had ample time to read back. `_jobs` is
+  /// process-lifetime, so without this a long-running proxy keeps every job it
+  /// ever ran — including the temp-file URI a completed object still points at.
+  void _evictStaleJobs() {
+    final cutoff = DateTime.now().toUtc().subtract(_jobRetention);
+    _jobs.removeWhere(
+      (jobId, job) =>
+          job.isTerminal &&
+          !_runningJobs.containsKey(jobId) &&
+          job.updatedAt.isBefore(cutoff),
+    );
+  }
+
   String _nextJobId() {
     final timestamp = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
     final entropy = _random.nextInt(1 << 32).toRadixString(36).padLeft(7, '0');
@@ -520,7 +552,12 @@ class MeshyProxyApp {
     if (error is MeshyTaskException) {
       return error.message;
     }
-    return error.toString();
+
+    // Anything else — SocketException, HandshakeException, TimeoutException —
+    // spells out the tunnel host and port the phone must never learn about.
+    // The caller gets a generic message; `_runJob` logs the real one.
+    return 'The proxy could not complete the generation request. '
+        'Check the server logs for details.';
   }
 
   bool _hasMeaningfulJobChange(MeshyJob current, MeshyJob next) {
@@ -603,6 +640,9 @@ class MeshyJob {
   final String? meshyError;
   final String? thumbnailUrl;
   final String? error;
+
+  bool get isTerminal =>
+      status == MeshyJobStatus.completed || status == MeshyJobStatus.error;
 
   MeshyJob copyWith({
     MeshyJobStatus? status,

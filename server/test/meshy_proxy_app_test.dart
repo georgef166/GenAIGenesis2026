@@ -694,6 +694,112 @@ void main() {
       await app.waitForJob(jobId);
     });
 
+    test('rejects a prompt over the length cap', () async {
+      final app = MeshyProxyApp(meshyApi: _FakeMeshyApi());
+
+      final response = await app.handler(
+        Request(
+          'POST',
+          Uri.parse('http://localhost/api/meshy/generate'),
+          body: jsonEncode(<String, Object?>{
+            'prompt': 'a' * 1001,
+            'kind': 'world',
+            'imageBase64': 'AA==',
+          }),
+        ),
+      );
+
+      expect(response.statusCode, 400);
+      final body =
+          jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(body['error'], contains('at most 1000 characters'));
+    });
+
+    test('hides transport failure detail from the client', () async {
+      final app = MeshyProxyApp(
+        meshyApi: _FakeMeshyApi(),
+        objectApi: _UnreachableMeshyApi(),
+        pollInterval: Duration.zero,
+      );
+
+      final createResponse = await app.handler(
+        Request(
+          'POST',
+          Uri.parse('http://localhost/api/meshy/generate'),
+          body: jsonEncode(<String, Object?>{
+            'prompt': 'a stone fox statue',
+            'imageBase64': 'AA==',
+          }),
+        ),
+      );
+      final jobId =
+          (jsonDecode(await createResponse.readAsString())
+              as Map<String, dynamic>)['jobId']
+          as String;
+      await app.waitForJob(jobId);
+
+      final statusResponse = await app.handler(
+        Request('GET', Uri.parse('http://localhost/api/meshy/generate/$jobId')),
+      );
+      final job =
+          jsonDecode(await statusResponse.readAsString())
+              as Map<String, dynamic>;
+
+      expect(job['status'], 'error');
+      expect(job['error'], contains('Check the server logs'));
+      expect(job['error'], isNot(contains('127.0.0.1')));
+      expect(job['error'], isNot(contains('SocketException')));
+    });
+
+    test('evicts terminal jobs older than the retention window', () async {
+      final app = MeshyProxyApp(
+        meshyApi: _FakeMeshyApi(),
+        objectApi: _FakeMeshyApi(),
+        pollInterval: Duration.zero,
+        jobRetention: Duration.zero,
+      );
+
+      Future<String> generate() async {
+        final response = await app.handler(
+          Request(
+            'POST',
+            Uri.parse('http://localhost/api/meshy/generate'),
+            body: jsonEncode(<String, Object?>{
+              'prompt': 'a stone fox statue',
+              'imageBase64': 'AA==',
+            }),
+          ),
+        );
+        return (jsonDecode(await response.readAsString())
+                as Map<String, dynamic>)['jobId']
+            as String;
+      }
+
+      final firstJobId = await generate();
+      await app.waitForJob(firstJobId);
+
+      // The second create sweeps the first, which is terminal and past a
+      // zero-length retention window.
+      final secondJobId = await generate();
+      await app.waitForJob(secondJobId);
+
+      final evicted = await app.handler(
+        Request(
+          'GET',
+          Uri.parse('http://localhost/api/meshy/generate/$firstJobId'),
+        ),
+      );
+      expect(evicted.statusCode, 404);
+
+      final kept = await app.handler(
+        Request(
+          'GET',
+          Uri.parse('http://localhost/api/meshy/generate/$secondJobId'),
+        ),
+      );
+      expect(kept.statusCode, 200);
+    });
+
     test('rejects malformed create responses with a clear error', () async {
       expect(
         () => MeshyCreatedTask.fromJson(<String, dynamic>{'id': 'task-1'}),
@@ -768,6 +874,27 @@ class _FakeMeshyApi implements MeshyApi {
       return _taskStates.last;
     }
     return _taskStates[_cursor++];
+  }
+}
+
+/// Stands in for a backend whose SSH tunnel is down: the raw exception text
+/// names the loopback host and port the phone must never see.
+class _UnreachableMeshyApi implements MeshyApi {
+  @override
+  Future<MeshyCreatedTask> createTask(
+    String prompt, {
+    required String kind,
+    String? imageBase64,
+    int? steps,
+  }) async {
+    throw const SocketException(
+      'Connection refused, address = 127.0.0.1, port = 8771',
+    );
+  }
+
+  @override
+  Future<MeshyTask> getTask(String taskId) async {
+    throw StateError('never reached');
   }
 }
 
