@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../config/langflow_config.dart';
 import '../models/research_result.dart';
 import '../services/langflow_service.dart';
 
@@ -11,22 +12,9 @@ class ResearchScreen extends StatefulWidget {
 }
 
 class _ResearchScreenState extends State<ResearchScreen> {
-  static const _baseUrl = String.fromEnvironment(
-    'LANGFLOW_BASE_URL',
-    defaultValue: 'https://aws-us-east-2.langflow.datastax.com',
-  );
-  static const _flowId = String.fromEnvironment(
-    'LANGFLOW_FLOW_ID',
-    defaultValue: '52f27664-602e-4012-bafd-0bf43bb1701c',
-  );
-  static const _appTokenUpper = String.fromEnvironment('LANGFLOW_APP_TOKEN');
-  static const _appTokenLower = String.fromEnvironment('langflow_app_token');
-  static final _appToken = _appTokenUpper.isNotEmpty
-      ? _appTokenUpper
-      : _appTokenLower;
-
   final _topicController = TextEditingController();
-  late final LangFlowService _service;
+  LangFlowService? _service;
+  String? _configurationError;
 
   bool _isLoading = false;
   ResearchResult? _researchResult;
@@ -35,27 +23,26 @@ class _ResearchScreenState extends State<ResearchScreen> {
   @override
   void initState() {
     super.initState();
-    _service = LangFlowService(
-      baseUrl: _baseUrl,
-      flowId: _flowId,
-      appToken: _appToken,
-    );
+    final configResult = LangflowConfiguration.fromEnvironment();
+    _configurationError = configResult.error;
+
+    final config = configResult.configuration;
+    if (config != null) {
+      _service = LangFlowService(runUri: config.runUri, apiKey: config.apiKey);
+    }
   }
 
   @override
   void dispose() {
     _topicController.dispose();
-    _service.dispose();
+    _service?.dispose();
     super.dispose();
   }
 
   Future<void> _submitTopic() async {
-    if (_appToken.isEmpty) {
+    if (_configurationError != null || _service == null) {
       setState(() {
-        _error =
-            'Missing LANGFLOW_APP_TOKEN. This value is read at build time. '
-            'Rebuild with --dart-define and then install the new APK, or use '
-            'flutter run with the same flags.';
+        _error = _configurationError ?? 'Langflow is not configured.';
       });
       return;
     }
@@ -77,7 +64,7 @@ class _ResearchScreenState extends State<ResearchScreen> {
     });
 
     try {
-      final result = await _service.fetchResearch(topic);
+      final result = await _service!.fetchResearch(topic);
       if (!mounted) {
         return;
       }
@@ -88,8 +75,12 @@ class _ResearchScreenState extends State<ResearchScreen> {
       if (!mounted) {
         return;
       }
+      final message = switch (e) {
+        LangFlowServiceException() => e.message,
+        _ => 'Could not load facts. $e',
+      };
       setState(() {
-        _error = 'Could not load facts. $e';
+        _error = message;
       });
     } finally {
       if (mounted) {

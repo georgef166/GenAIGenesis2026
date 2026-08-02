@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
@@ -6,32 +7,46 @@ import '../models/research_result.dart';
 
 class LangFlowService {
   LangFlowService({
-    required this.baseUrl,
-    required this.flowId,
-    required this.appToken,
+    required this.apiKey,
+    this.baseUrl,
+    this.flowId,
+    Uri? runUri,
     http.Client? client,
-  }) : _client = client ?? http.Client();
+    Duration timeout = const Duration(seconds: 90),
+  }) : _client = client ?? http.Client(),
+       _ownsClient = client == null,
+       _timeout = timeout,
+       _runUri = _withStreamFalse(
+         runUri ??
+             _buildRunUriFromParts(
+               baseUrl: baseUrl,
+               flowId: flowId,
+             ),
+       );
 
-  final String baseUrl;
-  final String flowId;
-  final String appToken;
+  final String? baseUrl;
+  final String? flowId;
+  final String apiKey;
   final http.Client _client;
+  final bool _ownsClient;
+  final Duration _timeout;
+  final Uri _runUri;
 
-  List<Uri> _candidateRunUris() {
-    final normalizedBase = baseUrl.endsWith('/')
-        ? baseUrl.substring(0, baseUrl.length - 1)
-        : baseUrl;
+  static Uri buildRunUri({required Uri baseUri, required String flowId}) {
+    final normalizedFlowId = flowId.trim();
+    final safeFlowId = Uri.encodeComponent(normalizedFlowId);
+    final runPath = '/api/v1/run/$safeFlowId';
 
-    return [
-      Uri.parse('$normalizedBase/lf/$flowId/api/v1/run'),
-      Uri.parse('$normalizedBase/api/v1/run/$flowId'),
-    ];
+    return baseUri.replace(
+      path: _joinPath(baseUri.path, runPath),
+      queryParameters: {'stream': 'false'},
+    );
   }
 
   Future<ResearchResult> fetchResearch(String topic) async {
     final trimmedTopic = topic.trim();
     if (trimmedTopic.isEmpty) {
-      throw const FormatException('Please enter a topic before submitting.');
+      throw const LangFlowServiceException('Please enter a topic before submitting.');
     }
 
     final requestBody = {
@@ -40,90 +55,177 @@ class LangFlowService {
       'output_type': 'chat',
     };
 
-    final attemptErrors = <String>[];
-    http.Response? successfulResponse;
-
-    for (final uri in _candidateRunUris()) {
-      final response = await _client.post(
-        uri,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $appToken',
-          'x-api-key': appToken,
-        },
-        body: jsonEncode(requestBody),
+    late final http.Response response;
+    try {
+      response = await _client
+          .post(
+            _runUri,
+            headers: {
+              'Content-Type': 'application/json',
+              'x-api-key': apiKey,
+            },
+            body: jsonEncode(requestBody),
+          )
+          .timeout(_timeout);
+    } on TimeoutException {
+      throw const LangFlowServiceException(
+        'The Langflow request timed out after 90 seconds. Please try again.',
       );
-
-      if (response.statusCode >= 200 && response.statusCode < 300) {
-        successfulResponse = response;
-        break;
+    } on SocketException {
+      throw LangFlowServiceException(
+        'Could not connect to Langflow at $_runUri. Verify the local server is running and reachable.',
+      );
+    } on http.ClientException catch (error) {
+      final lower = error.message.toLowerCase();
+      if (lower.contains('connection refused')) {
+        throw LangFlowServiceException(
+          'Langflow refused the connection at $_runUri. Verify the local server is running and reachable.',
+        );
       }
+      throw LangFlowServiceException('Langflow request failed: ${error.message}');
+    }
 
-      attemptErrors.add(
-        '${response.statusCode} at $uri: ${_summarizeServerError(response.body)}',
+    if (response.statusCode == HttpStatus.unauthorized ||
+        response.statusCode == HttpStatus.forbidden) {
+      throw LangFlowServiceException(
+        'Langflow rejected the API key (HTTP ${response.statusCode}). Check LANGFLOW_API_KEY.',
+        statusCode: response.statusCode,
       );
     }
 
-    if (successfulResponse == null) {
-      throw Exception(
-        'LangFlow API request failed. Attempts: ${attemptErrors.join(' | ')}',
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw LangFlowServiceException(
+        'Langflow request failed with HTTP ${response.statusCode}: ${_summarizeServerError(response.body)}',
+        statusCode: response.statusCode,
       );
     }
 
-    final decoded = jsonDecode(successfulResponse.body);
-    if (decoded is! Map<String, dynamic>) {
-      throw const FormatException('Unexpected API response format from LangFlow.');
-    }
-
+    final decoded = _decodeRootMap(response.body);
     final rawText = _extractMessageText(decoded);
     final cleanedJsonText = _cleanMarkdownBackticks(rawText);
-    final resultJson = jsonDecode(cleanedJsonText);
 
-    if (resultJson is! Map<String, dynamic>) {
-      throw const FormatException('LangFlow result is not a JSON object.');
-    }
-
+    final resultJson = _decodeResultMap(cleanedJsonText);
+    _validateResultFields(resultJson);
     return ResearchResult.fromJson(resultJson);
   }
 
+  static Uri _buildRunUriFromParts({String? baseUrl, String? flowId}) {
+    final trimmedBaseUrl = baseUrl?.trim() ?? '';
+    final trimmedFlowId = flowId?.trim() ?? '';
+    if (trimmedBaseUrl.isEmpty || trimmedFlowId.isEmpty) {
+      throw const LangFlowServiceException(
+        'Langflow configuration is incomplete. Provide either runUri or both baseUrl and flowId.',
+      );
+    }
+
+    final parsedBase = Uri.tryParse(trimmedBaseUrl);
+    final isValidBase =
+        parsedBase != null &&
+        parsedBase.hasScheme &&
+        (parsedBase.scheme == 'http' || parsedBase.scheme == 'https') &&
+        parsedBase.host.isNotEmpty;
+    if (!isValidBase) {
+      throw const LangFlowServiceException(
+        'LANGFLOW_BASE_URL must be an absolute http(s) URL.',
+      );
+    }
+
+    return buildRunUri(baseUri: parsedBase, flowId: trimmedFlowId);
+  }
+
+  static String _joinPath(String basePath, String appendedPath) {
+    final trimmedBasePath = basePath.endsWith('/')
+        ? basePath.substring(0, basePath.length - 1)
+        : basePath;
+    final normalizedAppended = appendedPath.startsWith('/')
+        ? appendedPath
+        : '/$appendedPath';
+    return '$trimmedBasePath$normalizedAppended';
+  }
+
+  static Uri _withStreamFalse(Uri uri) {
+    final query = <String, String>{...uri.queryParameters};
+    query['stream'] = 'false';
+    return uri.replace(queryParameters: query);
+  }
+
+  Map<String, dynamic> _decodeRootMap(String responseBody) {
+    final decoded = _tryDecodeJson(responseBody);
+    if (decoded is! Map<String, dynamic>) {
+      throw const LangFlowServiceException(
+        'Langflow returned a malformed top-level response.',
+      );
+    }
+
+    return decoded;
+  }
+
+  Map<String, dynamic> _decodeResultMap(String rawJsonText) {
+    final decoded = _tryDecodeJson(rawJsonText);
+    if (decoded is! Map<String, dynamic>) {
+      throw const LangFlowServiceException(
+        'Langflow returned message text that is not a JSON object.',
+      );
+    }
+
+    return decoded;
+  }
+
+  void _validateResultFields(Map<String, dynamic> json) {
+    const keys = ['topic', 'fact1', 'fact2', 'fact3', 'fact4', 'fact5', 'fact6'];
+    for (final key in keys) {
+      final value = json[key];
+      if (value is! String || value.trim().isEmpty) {
+        throw LangFlowServiceException(
+          'Langflow response is missing required field "$key".',
+        );
+      }
+    }
+  }
+
   String _extractMessageText(Map<String, dynamic> data) {
-    // Some hosted deployments wrap the payload in "data".
     final payload =
         (data['data'] is Map<String, dynamic>) ? data['data'] as Map<String, dynamic> : data;
 
     final outputs = payload['outputs'];
     if (outputs is! List || outputs.isEmpty) {
-      throw const FormatException('LangFlow output is missing outputs array.');
+      throw const LangFlowServiceException('Langflow response is missing outputs.');
     }
 
     final firstOutput = outputs.first;
     if (firstOutput is! Map<String, dynamic>) {
-      throw const FormatException('Unexpected first output format.');
+      throw const LangFlowServiceException('Langflow output item has an unexpected shape.');
     }
 
     final nestedOutputs = firstOutput['outputs'];
     if (nestedOutputs is! List || nestedOutputs.isEmpty) {
-      throw const FormatException('Nested outputs are missing.');
+      throw const LangFlowServiceException('Langflow nested outputs are missing.');
     }
 
     final firstNestedOutput = nestedOutputs.first;
     if (firstNestedOutput is! Map<String, dynamic>) {
-      throw const FormatException('Unexpected nested output format.');
+      throw const LangFlowServiceException(
+        'Langflow nested output has an unexpected shape.',
+      );
     }
 
     final results = firstNestedOutput['results'];
     if (results is! Map<String, dynamic>) {
-      throw const FormatException('Results section is missing.');
+      throw const LangFlowServiceException('Langflow results section is missing.');
     }
 
     final message = results['message'];
+    if (message is String && message.trim().isNotEmpty) {
+      return message;
+    }
+
     if (message is! Map<String, dynamic>) {
-      throw const FormatException('Message section is missing.');
+      throw const LangFlowServiceException('Langflow message section is missing.');
     }
 
     final text = message['text'];
     if (text is! String || text.trim().isEmpty) {
-      throw const FormatException('Message text is empty.');
+      throw const LangFlowServiceException('Langflow message text is empty.');
     }
 
     return text;
@@ -169,7 +271,28 @@ class LangFlowService {
     return cleaned;
   }
 
+  Object? _tryDecodeJson(String body) {
+    try {
+      return jsonDecode(body);
+    } on FormatException {
+      return null;
+    }
+  }
+
   void dispose() {
-    _client.close();
+    if (_ownsClient) {
+      _client.close();
+    }
+  }
+}
+
+class LangFlowServiceException implements Exception {
+  const LangFlowServiceException(this.message, {this.statusCode});
+
+  final String message;
+  final int? statusCode;
+
+  @override
+  String toString() => 'LangFlowServiceException: $message';
   }
 }
