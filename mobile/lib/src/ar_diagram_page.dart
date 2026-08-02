@@ -252,13 +252,14 @@ class _ARDiagramPageState extends State<ARDiagramPage>
   bool _handTrackingUnavailable = false;
   Timer? _gestureHintTimer;
   HandGestureInterpreter? _gestureInterpreter;
-  final ValueNotifier<_HandOverlayModel> _handOverlay =
-      ValueNotifier(const _HandOverlayModel(
-    hands: [],
-    landmarkSets: [],
-    zooming: false,
-    statusText: '',
-  ));
+  final ValueNotifier<_HandOverlayModel> _handOverlay = ValueNotifier(
+    const _HandOverlayModel(
+      hands: [],
+      landmarkSets: [],
+      zooming: false,
+      statusText: '',
+    ),
+  );
 
   // Touch drag/zoom
   double _touchScaleAtStart = _initialDiagramScale;
@@ -737,8 +738,10 @@ class _ARDiagramPageState extends State<ARDiagramPage>
           _zoomScaleAtStart = _diagramScale;
           zooming = true;
         case ZoomUpdate(:final spanRatio):
-          _diagramScale = (_zoomScaleAtStart * spanRatio)
-              .clamp(_minDiagramScale, _maxDiagramScale);
+          _diagramScale = (_zoomScaleAtStart * spanRatio).clamp(
+            _minDiagramScale,
+            _maxDiagramScale,
+          );
           _applyDiagramTransform();
         case ZoomEnd():
           zooming = false;
@@ -755,7 +758,7 @@ class _ARDiagramPageState extends State<ARDiagramPage>
       statusText: frame.hands.isEmpty
           ? 'No hands detected'
           : '${frame.hands.length} hand${frame.hands.length == 1 ? '' : 's'}  '
-              'pinch: $ratios',
+                'pinch: $ratios',
     );
   }
 
@@ -769,15 +772,16 @@ class _ARDiagramPageState extends State<ARDiagramPage>
 
   void _onTouchScaleUpdate(ScaleUpdateDetails details, Size viewSize) {
     if (details.scale != 1.0) {
-      _diagramScale = (_touchScaleAtStart * details.scale)
-          .clamp(_minDiagramScale, _maxDiagramScale);
+      _diagramScale = (_touchScaleAtStart * details.scale).clamp(
+        _minDiagramScale,
+        _maxDiagramScale,
+      );
     }
     final delta = details.focalPointDelta;
     if (delta != Offset.zero && viewSize.width > 0 && viewSize.height > 0) {
-      _applyDragDelta(Offset(
-        delta.dx / viewSize.width,
-        delta.dy / viewSize.height,
-      ));
+      _applyDragDelta(
+        Offset(delta.dx / viewSize.width, delta.dy / viewSize.height),
+      );
     } else {
       _applyDiagramTransform();
     }
@@ -789,10 +793,13 @@ class _ARDiagramPageState extends State<ARDiagramPage>
     final anchorPose = _lastAnchorPose;
     if (cameraPose == null || anchorPose == null) return;
 
-    final objectWorld = anchorPose.getTranslation() +
+    final objectWorld =
+        anchorPose.getTranslation() +
         anchorPose.getRotation().transformed(_diagramOffset);
-    final distance =
-        (objectWorld - cameraPose.getTranslation()).length.clamp(0.3, 10.0);
+    final distance = (objectWorld - cameraPose.getTranslation()).length.clamp(
+      0.3,
+      10.0,
+    );
 
     _diagramOffset += computeAnchorLocalDelta(
       cameraPose: cameraPose,
@@ -829,8 +836,10 @@ class _ARDiagramPageState extends State<ARDiagramPage>
       );
     }
 
-    final lineCount =
-        math.min(_pointerLineNodes.length, _lineGeometries.length);
+    final lineCount = math.min(
+      _pointerLineNodes.length,
+      _lineGeometries.length,
+    );
     for (var i = 0; i < lineCount; i++) {
       final geometry = _lineGeometries[i];
       _pointerLineNodes[i].transform = Matrix4.compose(
@@ -1200,18 +1209,23 @@ class _ARDiagramPageState extends State<ARDiagramPage>
               child: SafeArea(
                 child: Padding(
                   padding: const EdgeInsets.only(bottom: 24),
-                  child: AnimatedOpacity(
-                    opacity: _gestureHintVisible ? 1.0 : 0.0,
-                    duration: const Duration(milliseconds: 400),
-                    child: _Chip(
-                      label: _gestureModeEnabled
-                          ? 'Hand gestures active · pinch to grab, two hands '
-                                'to zoom'
-                          : 'Touch mode — hand tracking unavailable · drag to '
-                                'move, pinch to zoom',
-                      icon: _gestureModeEnabled
-                          ? Icons.back_hand_outlined
-                          : Icons.touch_app_outlined,
+                  // The chip is purely informational and sits above the touch
+                  // GestureDetector; a faded-out AnimatedOpacity still hit
+                  // tests, which would eat drags started near the bottom edge.
+                  child: IgnorePointer(
+                    child: AnimatedOpacity(
+                      opacity: _gestureHintVisible ? 1.0 : 0.0,
+                      duration: const Duration(milliseconds: 400),
+                      child: _Chip(
+                        label: _gestureModeEnabled
+                            ? 'Hand gestures active · pinch to grab, two '
+                                  'hands to zoom'
+                            : 'Touch mode — hand tracking unavailable · drag '
+                                  'to move, pinch to zoom',
+                        icon: _gestureModeEnabled
+                            ? Icons.back_hand_outlined
+                            : Icons.touch_app_outlined,
+                      ),
                     ),
                   ),
                 ),
@@ -1366,10 +1380,9 @@ class _HandOverlayPainter extends CustomPainter {
     _paintStatusText(canvas, size);
     final centers = <Offset>[];
     for (final hand in model.hands) {
-      centers.add(Offset(
-        hand.position.dx * size.width,
-        hand.position.dy * size.height,
-      ));
+      centers.add(
+        Offset(hand.position.dx * size.width, hand.position.dy * size.height),
+      );
     }
 
     if (model.zooming && centers.length >= 2) {
