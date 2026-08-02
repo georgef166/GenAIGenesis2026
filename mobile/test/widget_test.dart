@@ -256,6 +256,60 @@ void main() {
     await _tick(tester);
   });
 
+  testWidgets('the gesture chip names the active input path', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: MeshyGestureChip(
+            handTracking: true,
+            handTrackingUnavailable: false,
+            visible: true,
+          ),
+        ),
+      ),
+    );
+
+    expect(
+      find.text('Hand gestures · pinch to grab, two hands to zoom'),
+      findsOneWidget,
+    );
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: MeshyGestureChip(
+            handTracking: false,
+            handTrackingUnavailable: true,
+            visible: true,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('Touch mode · hand tracking unavailable'), findsOneWidget);
+  });
+
+  // Tap-to-place is the page's primary gesture, so nothing gesture-related may
+  // mount over the AR view before a model exists.
+  testWidgets('gesture controls stay off the page until a model is placed', (
+    WidgetTester tester,
+  ) async {
+    _installFakes(
+      tester,
+      _FakeProxy(
+        createResponse: (202, '{"jobId":"job-4","status":"submitting"}'),
+        pollResponse: (200, '{"jobId":"job-4","status":"submitting"}'),
+      ),
+    );
+
+    await tester.pumpWidget(const MaterialApp(home: ARMeshyPage()));
+    await _tick(tester);
+
+    expect(find.byType(MeshyGestureChip), findsNothing);
+  });
+
   // The app is landscape-locked, so ~411 logical px of height is all the
   // overlays ever get. The bottom prompt-panel reserve used to be a hardcoded
   // 220, which left the 264 px status overlay 175 px to live in — the "bottom
@@ -369,6 +423,52 @@ void main() {
         tester.getSize(find.byType(rocket.ARStatusOverlay)).height,
         budget,
       );
+    });
+
+    // A faded-out AnimatedOpacity still hit tests. The chip sits directly over
+    // the touch drag/zoom detector, so without its IgnorePointer it swallows
+    // drags started near the bottom edge — the exact bug just fixed on the
+    // diagram page.
+    testWidgets('the invisible gesture chip does not eat drags below it', (
+      WidgetTester tester,
+    ) async {
+      useLandscapePhone(tester);
+      var tapsReachingTheArView = 0;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Stack(
+              children: [
+                Positioned.fill(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => tapsReachingTheArView++,
+                  ),
+                ),
+                const Align(
+                  alignment: Alignment.bottomLeft,
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(16, 0, 16, 16),
+                    child: MeshyGestureChip(
+                      handTracking: false,
+                      handTrackingUnavailable: false,
+                      visible: false,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+
+      expect(tester.takeException(), isNull);
+
+      await tester.tapAt(tester.getCenter(find.byType(MeshyGestureChip)));
+      await tester.pump();
+
+      expect(tapsReachingTheArView, 1);
     });
 
     testWidgets('the prompt panel lays out without overflowing', (

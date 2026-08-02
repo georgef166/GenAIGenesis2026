@@ -174,12 +174,34 @@ void main() {
         anchorPose: Matrix4.identity(),
         normDelta: const Offset(0.1, -0.05),
         distance: 2.0,
+        viewAspect: 1.0,
         kFov: 1.4,
       );
       // right = +x, up = +y; screen down is negative dy -> +up.
       expect(delta.x, closeTo(0.1 * 2.0 * 1.4, 1e-9));
       expect(delta.y, closeTo(0.05 * 2.0 * 1.4, 1e-9));
       expect(delta.z, closeTo(0.0, 1e-9));
+    });
+
+    test('vertical delta is divided by the view aspect', () {
+      // kFov calibrates the horizontal FOV, and dy is a fraction of *height*,
+      // so on the app's landscape aspect a full-height drag must move the
+      // object by the frustum's height, not its width. Without the division
+      // vertical drag overshoots the finger by the aspect ratio.
+      const aspect = 2340 / 1080;
+      final delta = computeAnchorLocalDelta(
+        cameraPose: Matrix4.identity(),
+        anchorPose: Matrix4.identity(),
+        normDelta: const Offset(0.25, -0.25),
+        distance: 2.0,
+        viewAspect: aspect,
+        kFov: 1.4,
+      );
+      expect(delta.x, closeTo(0.25 * 2.0 * 1.4, 1e-9));
+      expect(delta.y, closeTo(0.25 * 2.0 * 1.4 / aspect, 1e-9));
+      // Equal-magnitude screen components must not come back equal in world
+      // space on a non-square view — that is what makes diagonals curve.
+      expect(delta.y, lessThan(delta.x));
     });
 
     test('anchor rotation converts world delta into anchor space', () {
@@ -190,6 +212,7 @@ void main() {
         anchorPose: anchorPose,
         normDelta: const Offset(0.1, 0),
         distance: 1.0,
+        viewAspect: 1.0,
         kFov: 1.0,
       );
       expect(delta.x.abs(), lessThan(1e-9));

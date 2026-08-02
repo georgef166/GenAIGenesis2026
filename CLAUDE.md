@@ -83,7 +83,25 @@ The app is **landscape-locked** (`SystemChrome.setPreferredOrientations` in `mai
 
 ### Hand gestures
 
-`ar_diagram_page.dart` can drive the placed diagram with hand gestures. ARCore owns the camera exclusively, so detection runs **inside the plugin** on the live AR frame — MediaPipe Hand Landmarker on Android (`tasks-vision`, bundled `hand_landmarker.task`, coordinates mapped through `Frame.transformCoordinates2d`), Apple Vision on iOS 14+. The channel contract is `setHandTracking {enabled} -> bool` and an `onHandGesture` frame at ~15 Hz (`PATCHES.md` patch 6). `src/hand_gesture_interpreter.dart` turns those frames into `GestureCommand`s (a hysteresis state machine, idle → dragging → zooming) and `src/gesture_transform_math.dart` converts a normalized screen delta into an anchor-local one. Both feed `_applyDragDelta` / `_diagramScale` → `_applyDiagramTransform`, which re-derives all 13 sibling node transforms so cards and pointer lines move with the rocket.
+`ar_diagram_page.dart` can drive the placed diagram with hand gestures. ARCore owns the camera exclusively, so detection runs **inside the plugin** on the live AR frame — MediaPipe Hand Landmarker on Android (`tasks-vision`, bundled `hand_landmarker.task`, coordinates mapped through `Frame.transformCoordinates2d`), Apple Vision on iOS 14+. The channel contract is `setHandTracking {enabled} -> bool` and an `onHandGesture` frame at ~15 Hz (`PATCHES.md` patch 6). `src/hand_gesture_interpreter.dart` turns those frames into `GestureCommand`s (a hysteresis state machine, idle → dragging → zooming) and `src/gesture_transform_math.dart` converts a normalized screen delta into an anchor-local one. Its `kFov = 1.4` calibrates the **horizontal** field of view while `normDelta.dy` is a fraction of *height*, so `computeAnchorLocalDelta` takes a `viewAspect` and divides dy by it — drop that and vertical drag overshoots the finger by the full aspect ratio (2.2x on this landscape-locked app) and diagonals curve. Both feed `_applyDragDelta` / `_diagramScale` → `_applyDiagramTransform`, which re-derives all 13 sibling node transforms so cards and pointer lines move with the rocket.
+
+`ar_meshy_page.dart` carries the same layer for its single generated node:
+`_applyDragDelta` / `_modelScale` → `_applyModelTransform`, which recomposes
+`_modelNode.transform` from `_modelBasePosition + _modelOffset` and
+`_modelBaseScale * _modelScale` (clamped to 0.25–10× of `_generatedModelScale`,
+i.e. 3.5 cm–1.4 m). Nothing gesture-related mounts until `_modelNode != null`,
+because on that page a plane tap *is* the placement action; all of it is
+cleared in `_removePlacedModel`, the one choke point every reset routes
+through, so a new model never inherits the previous offset or scale.
+
+Both pages keep **two** pinch-start fields (`_handZoomScaleAtStart` /
+`_touchScaleAtStart`) on purpose: hand tracking keeps running while a finger is
+down and `onScaleStart` fires on the first pointer *down*, so one shared field
+lets a resting thumb rebase an in-flight hand zoom and snap the model to a
+clamp. `_startPosePolling` also polls once immediately — `Timer.periodic` does
+not fire until the first period elapses and `_applyDragDelta` needs a camera
+pose, so without it every gesture in the first ~150 ms after placement is
+silently dropped.
 
 **Touch is the fallback and is always live.** A `GestureDetector` (a single scale recognizer covers one-finger drag and two-finger pinch) sits over the AR view once placed and calls the *same* `_applyDragDelta` / `_diagramScale` code, so a device where `setHandTracking` returns false still moves and zooms — a real risk, since the historical MediaPipe protobuf fault (`field platorm_ for s1.D not found`) is unmitigated. A chip at the bottom of the screen names the active mode. Scope is drag + zoom only; all three pages keep `handlePans: false, handleRotation: false`, and **must** — patch 4 warns that `handlePans: true` enables native touch-drag and `isPositionEditable`, which fight the programmatic transforms both input paths rely on.
 

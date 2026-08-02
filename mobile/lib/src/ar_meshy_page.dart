@@ -12,11 +12,14 @@ import 'package:ar_flutter_plugin_2/managers/ar_session_manager.dart';
 import 'package:ar_flutter_plugin_2/models/ar_anchor.dart';
 import 'package:ar_flutter_plugin_2/models/ar_hittest_result.dart';
 import 'package:ar_flutter_plugin_2/models/ar_node.dart';
+import 'package:ar_flutter_plugin_2/models/hand_gesture_frame.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:vector_math/vector_math_64.dart' hide Colors;
 
+import 'gesture_transform_math.dart';
+import 'hand_gesture_interpreter.dart';
 import 'meshy_model_history.dart';
 import 'meshy_proxy_client.dart';
 
@@ -43,6 +46,14 @@ const _generatedModelScale = 0.14;
 /// The vendored plugin's iOS side scales every GLTF child by 0.01, so every
 /// `localGLTF2`/`webGLB` node has to undo it. Mirrors `ar_rocket_page.dart:32`.
 const _iosPluginModelScaleCompensation = 100.0;
+
+/// Multipliers on [_generatedModelScale] that drag/zoom may reach. On Android
+/// the product is metres of the largest dimension, so the placed model spans
+/// 3.5 cm at the floor and 1.4 m at the ceiling — never invisible, never
+/// bigger than the room. iOS renders the same sizes through the ×100
+/// compensation baked into the base scale.
+const _minGestureScale = 0.25;
+const _maxGestureScale = 10.0;
 
 /// The proxy caps an upload at 8 MB decoded and a modern phone photo is 4–12 MB
 /// straight off the sensor, so the picker resamples before we ever see bytes.
@@ -117,6 +128,38 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
   int _planeCount = 0;
   int _generationToken = 0;
   int _pollRetryAttempt = 0;
+
+  // -------------------------------------------------------------------
+  // Gesture manipulation of the placed model (drag + zoom, no rotation).
+  // Two input paths — hand tracking and touch — feed the same
+  // _applyDragDelta/_modelScale state, exactly as on ar_diagram_page.dart.
+  // -------------------------------------------------------------------
+
+  Vector3 _modelOffset = Vector3.zero();
+  double _modelScale = 1.0;
+
+  /// Scale when the current pinch started, one field per input path. They must
+  /// stay separate: hand tracking keeps running while a finger is on the
+  /// screen, and `onScaleStart` fires on the first pointer *down*, so a single
+  /// shared field lets a resting thumb rebase an in-flight hand zoom and snap
+  /// the model to a clamp.
+  double _handZoomScaleAtStart = 1.0;
+  double _touchScaleAtStart = 1.0;
+
+  HandGestureInterpreter? _gestureInterpreter;
+  bool _handTrackingEnabled = false;
+
+  /// Set once `setHandTracking` reported the device cannot do it (iOS < 14,
+  /// MediaPipe load failure). Touch stays live either way; this only changes
+  /// what the mode chip says.
+  bool _handTrackingUnavailable = false;
+  bool _gestureHintVisible = false;
+  Timer? _gestureHintTimer;
+
+  Timer? _poseTimer;
+  bool _poseUpdateInFlight = false;
+  Matrix4? _lastCameraPose;
+  Matrix4? _lastAnchorPose;
 
   MeshyProxyClient? get _meshyClient => _proxyConfiguration.client;
 
@@ -361,6 +404,15 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _ensureCameraPermission(requestIfNeeded: false);
+      if (_modelNode != null) {
+        _startPosePolling();
+        unawaited(_enableHandTracking());
+      }
+    } else if (state == AppLifecycleState.paused) {
+      // The session is paused too, so every poll just logs a swallowed error.
+      _poseTimer?.cancel();
+      _poseTimer = null;
+      unawaited(_disableHandTracking());
     }
   }
 
@@ -468,6 +520,7 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
     sessionManager.onError = _handleSessionError;
     sessionManager.onPlaneDetected = _handlePlaneDetected;
     sessionManager.onPlaneOrPointTap = _handlePlaneOrPointTap;
+    sessionManager.onHandGesture = _handleHandGestureFrame;
 
     if (_isCameraPermissionGranted) {
       _initializeSession();
@@ -607,6 +660,12 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
         // here left the screen with no way out.
       });
       _sessionManager?.showPlanes(false);
+      // Fallback anchor pose for devices where `getPose(anchor)` returns null;
+      // the camera pose it also needs comes from the immediate poll inside
+      // _startPosePolling.
+      _lastAnchorPose = Matrix4.fromFloat64List(hit.worldTransform.storage);
+      _startPosePolling();
+      unawaited(_enableHandTracking());
       if (usedFallbackSource) {
         _showTransientMessage(
           'Used the original generation URL because the saved local model '
@@ -625,16 +684,246 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
     }
   }
 
+  /// Node scale at [_modelScale] = 1. On Android this is metres of the
+  /// model's largest dimension; on iOS it is a raw multiplier that has to undo
+  /// the plugin's 0.01 GLTF factor.
+  Vector3 get _modelBaseScale => Vector3.all(
+    _generatedModelScale *
+        (Platform.isIOS ? _iosPluginModelScaleCompensation : 1.0),
+  );
+
+  /// Anchor-local resting position: 1 cm above the plane so the model does not
+  /// z-fight with it.
+  static Vector3 get _modelBasePosition => Vector3(0.0, 0.01, 0.0);
+
   ARNode _buildARNode(MeshyActiveModel model) {
-    final scale =
-        _generatedModelScale *
-        (Platform.isIOS ? _iosPluginModelScaleCompensation : 1.0);
     return ARNode(
       type: model.nodeType,
       uri: model.nodeUri,
-      scale: Vector3.all(scale),
-      position: Vector3(0.0, 0.01, 0.0),
+      scale: _modelBaseScale * _modelScale,
+      position: _modelBasePosition + _modelOffset,
       rotation: Vector4(0.0, 1.0, 0.0, 0.0),
+    );
+  }
+
+  // -------------------------------------------------------------------
+  // Gesture manipulation
+  // -------------------------------------------------------------------
+
+  void _startPosePolling() {
+    _poseTimer?.cancel();
+    // Timer.periodic does not fire until the first period elapses, and
+    // _applyDragDelta needs a camera pose as well as an anchor one, so poll
+    // once now: without it every gesture in the ~150 ms right after placement
+    // — when the user is most likely to drag — is silently dropped.
+    unawaited(_updatePoses());
+    // ponytail: 10 Hz. The poses only supply the camera's orientation and the
+    // model's distance, both of which change slowly; drop to the diagram
+    // page's 33 ms if fast phone rotation during a drag ever feels laggy.
+    _poseTimer = Timer.periodic(
+      const Duration(milliseconds: 100),
+      (_) => unawaited(_updatePoses()),
+    );
+  }
+
+  Future<void> _updatePoses() async {
+    final sessionManager = _sessionManager;
+    final anchor = _modelAnchor;
+    if (_poseUpdateInFlight || !mounted || sessionManager == null ||
+        anchor == null) {
+      return;
+    }
+
+    // Two platform round trips per tick: if they ever run longer than the
+    // period, drop the tick rather than let an older reply land after a
+    // newer one and rewind the poses mid-drag.
+    _poseUpdateInFlight = true;
+    try {
+      final cameraPose = await sessionManager.getCameraPose();
+      if (!mounted || cameraPose == null) {
+        return;
+      }
+      final anchorPose = await sessionManager.getPose(anchor);
+      if (!mounted) {
+        return;
+      }
+
+      _lastCameraPose = cameraPose;
+      if (anchorPose != null) {
+        _lastAnchorPose = anchorPose;
+      }
+    } finally {
+      _poseUpdateInFlight = false;
+    }
+  }
+
+  Future<void> _enableHandTracking() async {
+    if (_handTrackingEnabled || !mounted) {
+      return;
+    }
+
+    final sessionManager = _sessionManager;
+    if (sessionManager == null) {
+      return;
+    }
+
+    final size = MediaQuery.sizeOf(context);
+    _gestureInterpreter = HandGestureInterpreter(
+      viewAspect: size.height > 0 ? size.width / size.height : 16 / 9,
+    );
+
+    final supported = await sessionManager.setHandTracking(true);
+    // A reset landing inside that round trip leaves no model to manipulate;
+    // without this the tracker would keep running per-frame inference until
+    // the next place-then-remove.
+    if (!mounted || _modelNode == null) {
+      _gestureInterpreter = null;
+      if (supported) {
+        unawaited(sessionManager.setHandTracking(false));
+      }
+      return;
+    }
+
+    if (!supported) {
+      _gestureInterpreter = null;
+      setState(() => _handTrackingUnavailable = true);
+      _flashGestureHint();
+      return;
+    }
+
+    setState(() {
+      _handTrackingEnabled = true;
+      _handTrackingUnavailable = false;
+    });
+    _flashGestureHint();
+  }
+
+  Future<void> _disableHandTracking() async {
+    // Above the guard: on a device where setHandTracking(false) came back the
+    // hint is still flashing even though tracking never turned on, and a reset
+    // inside those 4 s would otherwise leave the chip visible for the next
+    // placement with a stale timer about to hide it.
+    _gestureHintTimer?.cancel();
+    _gestureInterpreter = null;
+    if (mounted) {
+      setState(() => _gestureHintVisible = false);
+    }
+
+    if (!_handTrackingEnabled) {
+      return;
+    }
+
+    if (mounted) {
+      setState(() => _handTrackingEnabled = false);
+    } else {
+      _handTrackingEnabled = false;
+    }
+    await _sessionManager?.setHandTracking(false);
+  }
+
+  /// Shows the input-mode chip, then fades it out so it does not sit over the
+  /// AR scene forever.
+  void _flashGestureHint() {
+    _gestureHintTimer?.cancel();
+    if (!mounted) {
+      return;
+    }
+
+    setState(() => _gestureHintVisible = true);
+    _gestureHintTimer = Timer(const Duration(seconds: 4), () {
+      if (mounted) {
+        setState(() => _gestureHintVisible = false);
+      }
+    });
+  }
+
+  void _handleHandGestureFrame(HandGestureFrame frame) {
+    final interpreter = _gestureInterpreter;
+    if (!_handTrackingEnabled ||
+        interpreter == null ||
+        !mounted ||
+        _modelNode == null) {
+      return;
+    }
+
+    for (final command in interpreter.ingest(frame)) {
+      switch (command) {
+        case DragStart():
+        case DragEnd():
+        case ZoomEnd():
+          break;
+        case DragUpdate(:final delta):
+          _applyDragDelta(delta, interpreter.viewAspect);
+        case ZoomStart():
+          _handZoomScaleAtStart = _modelScale;
+        case ZoomUpdate(:final spanRatio):
+          _modelScale = (_handZoomScaleAtStart * spanRatio).clamp(
+            _minGestureScale,
+            _maxGestureScale,
+          );
+          _applyModelTransform();
+      }
+    }
+  }
+
+  // Touch fallback. Always live once placed, not just when hand tracking
+  // failed: one scale recognizer covers both one-finger drag and two-finger
+  // pinch, and both land in the same transform code the interpreter drives.
+
+  void _onTouchScaleStart(ScaleStartDetails details) {
+    _touchScaleAtStart = _modelScale;
+  }
+
+  void _onTouchScaleUpdate(ScaleUpdateDetails details, Size viewSize) {
+    if (details.scale != 1.0) {
+      _modelScale = (_touchScaleAtStart * details.scale).clamp(
+        _minGestureScale,
+        _maxGestureScale,
+      );
+    }
+
+    final delta = details.focalPointDelta;
+    if (delta != Offset.zero && viewSize.width > 0 && viewSize.height > 0) {
+      _applyDragDelta(
+        Offset(delta.dx / viewSize.width, delta.dy / viewSize.height),
+        viewSize.width / viewSize.height,
+      );
+    } else {
+      _applyModelTransform();
+    }
+  }
+
+  /// Moves the model in the camera-facing plane at its current distance.
+  void _applyDragDelta(Offset normDelta, double viewAspect) {
+    final cameraPose = _lastCameraPose;
+    final anchorPose = _lastAnchorPose;
+    if (cameraPose == null || anchorPose == null) {
+      return;
+    }
+
+    final modelWorld =
+        anchorPose.getTranslation() +
+        anchorPose.getRotation().transformed(_modelBasePosition + _modelOffset);
+    final distance = (modelWorld - cameraPose.getTranslation()).length.clamp(
+      0.3,
+      10.0,
+    );
+
+    _modelOffset += computeAnchorLocalDelta(
+      cameraPose: cameraPose,
+      anchorPose: anchorPose,
+      normDelta: normDelta,
+      distance: distance,
+      viewAspect: viewAspect,
+    );
+    _applyModelTransform();
+  }
+
+  void _applyModelTransform() {
+    _modelNode?.transform = Matrix4.compose(
+      _modelBasePosition + _modelOffset,
+      Quaternion.identity(),
+      _modelBaseScale * _modelScale,
     );
   }
 
@@ -1034,7 +1323,21 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
     _syncReadyState();
   }
 
+  /// The single choke point every resetter routes through
+  /// (`_resetPlacedModel`, `_prepareForNewGeneration`,
+  /// `_handleRecentModelSelected`), so gesture state is cleared exactly once
+  /// and no new model inherits the previous one's offset or scale.
   Future<void> _removePlacedModel() async {
+    _poseTimer?.cancel();
+    _poseTimer = null;
+    _lastCameraPose = null;
+    _lastAnchorPose = null;
+    _modelOffset = Vector3.zero();
+    _modelScale = 1.0;
+    _handZoomScaleAtStart = 1.0;
+    _touchScaleAtStart = 1.0;
+    await _disableHandTracking();
+
     final objectManager = _objectManager;
     final anchorManager = _anchorManager;
     final modelNode = _modelNode;
@@ -1214,11 +1517,16 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
   @override
   void dispose() {
     _generationToken++;
+    _poseTimer?.cancel();
+    _gestureHintTimer?.cancel();
     _promptController
       ..removeListener(_handlePromptChanged)
       ..dispose();
     WidgetsBinding.instance.removeObserver(this);
     _modelHistoryStore.close();
+    if (_handTrackingEnabled) {
+      _sessionManager?.setHandTracking(false);
+    }
     _sessionManager?.dispose();
     _meshyClient?.close();
     super.dispose();
@@ -1250,6 +1558,40 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
               onARViewCreated: _onARViewCreated,
               planeDetectionConfig: PlaneDetectionConfig.horizontal,
             ),
+
+          // Touch drag/zoom. Only once a model exists, so the plane tap that
+          // *performs* placement still reaches the AR view; after placement
+          // `_handlePlaneOrPointTap` ignores taps anyway. Everything below is
+          // later in the Stack and therefore hit-tested first, so the status
+          // overlay, the prompt pill/panel and the panorama viewer all keep
+          // their input.
+          if (_modelNode != null && panoramaUrl == null)
+            Positioned.fill(
+              child: LayoutBuilder(
+                builder: (context, constraints) => GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onScaleStart: _onTouchScaleStart,
+                  onScaleUpdate: (details) =>
+                      _onTouchScaleUpdate(details, constraints.biggest),
+                ),
+              ),
+            ),
+
+          if (_modelNode != null && panoramaUrl == null)
+            Align(
+              alignment: Alignment.bottomLeft,
+              child: SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  child: MeshyGestureChip(
+                    handTracking: _handTrackingEnabled,
+                    handTrackingUnavailable: _handTrackingUnavailable,
+                    visible: _gestureHintVisible,
+                  ),
+                ),
+              ),
+            ),
+
           if (panoramaUrl == null)
             SafeArea(
               child: Padding(
@@ -2033,6 +2375,50 @@ class _RecentModelCard extends StatelessWidget {
     final hour = local.hour.toString().padLeft(2, '0');
     final minute = local.minute.toString().padLeft(2, '0');
     return '$month/$day $hour:$minute';
+  }
+}
+
+/// Names which of the two input paths into the model's drag/zoom transform is
+/// live. Purely informational: it sits over the touch `GestureDetector`, and a
+/// faded-out `AnimatedOpacity` still hit tests, so the [IgnorePointer] is
+/// load-bearing — without it the chip eats drags started near the bottom edge.
+class MeshyGestureChip extends StatelessWidget {
+  const MeshyGestureChip({
+    super.key,
+    required this.handTracking,
+    required this.handTrackingUnavailable,
+    required this.visible,
+  });
+
+  final bool handTracking;
+  final bool handTrackingUnavailable;
+  final bool visible;
+
+  @override
+  Widget build(BuildContext context) {
+    final String label;
+    if (handTracking) {
+      label = 'Hand gestures · pinch to grab, two hands to zoom';
+    } else if (handTrackingUnavailable) {
+      label = 'Touch mode · hand tracking unavailable';
+    } else {
+      label = 'Touch mode · drag to move, pinch to zoom';
+    }
+
+    return IgnorePointer(
+      child: AnimatedOpacity(
+        opacity: visible ? 1.0 : 0.0,
+        duration: MediaQuery.disableAnimationsOf(context)
+            ? Duration.zero
+            : const Duration(milliseconds: 400),
+        child: _OverlayChip(
+          label: label,
+          icon: handTracking
+              ? Icons.back_hand_outlined
+              : Icons.touch_app_outlined,
+        ),
+      ),
+    );
   }
 }
 

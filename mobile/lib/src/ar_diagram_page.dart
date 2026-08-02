@@ -731,7 +731,7 @@ class _ARDiagramPageState extends State<ARDiagramPage>
         case DragStart():
           break;
         case DragUpdate(:final delta):
-          _applyDragDelta(delta);
+          _applyDragDelta(delta, interpreter.viewAspect);
         case DragEnd():
           break;
         case ZoomStart():
@@ -781,6 +781,7 @@ class _ARDiagramPageState extends State<ARDiagramPage>
     if (delta != Offset.zero && viewSize.width > 0 && viewSize.height > 0) {
       _applyDragDelta(
         Offset(delta.dx / viewSize.width, delta.dy / viewSize.height),
+        viewSize.width / viewSize.height,
       );
     } else {
       _applyDiagramTransform();
@@ -788,7 +789,7 @@ class _ARDiagramPageState extends State<ARDiagramPage>
   }
 
   /// Moves the diagram in the camera-facing plane at its current distance.
-  void _applyDragDelta(Offset normDelta) {
+  void _applyDragDelta(Offset normDelta, double viewAspect) {
     final cameraPose = _lastCameraPose;
     final anchorPose = _lastAnchorPose;
     if (cameraPose == null || anchorPose == null) return;
@@ -806,6 +807,7 @@ class _ARDiagramPageState extends State<ARDiagramPage>
       anchorPose: anchorPose,
       normDelta: normDelta,
       distance: distance,
+      viewAspect: viewAspect,
     );
     _applyDiagramTransform();
   }

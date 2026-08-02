@@ -9,11 +9,20 @@ import 'package:vector_math/vector_math_64.dart';
 /// camera's negative up vector, scaled by distance and [kFov]
 /// (approximately 2*tan(horizontalFov/2); tuned constant since the plugin
 /// exposes no camera intrinsics).
+///
+/// [normDelta] is normalized per axis — dx by view width, dy by view height —
+/// which is what both input paths produce (touch divides by the view's own
+/// dimensions, and the plugin reports hand centroids as `VIEW_NORMALIZED`).
+/// [kFov] calibrates the *horizontal* field of view, so dy is additionally
+/// divided by [viewAspect] (width/height); without that, vertical drag
+/// overshoots the finger by exactly the aspect ratio — 2.2x on this
+/// landscape-locked app — and diagonal drags curve.
 Vector3 computeAnchorLocalDelta({
   required Matrix4 cameraPose,
   required Matrix4 anchorPose,
   required Offset normDelta,
   required double distance,
+  required double viewAspect,
   double kFov = 1.4,
 }) {
   final cameraRight =
@@ -24,7 +33,7 @@ Vector3 computeAnchorLocalDelta({
         ..normalize();
 
   final worldDelta = cameraRight * (normDelta.dx * distance * kFov) -
-      cameraUp * (normDelta.dy * distance * kFov);
+      cameraUp * (normDelta.dy * distance * kFov / viewAspect);
 
   final anchorRotation = anchorPose.getRotation()..invert();
   return anchorRotation.transformed(worldDelta);
