@@ -13,9 +13,11 @@ import 'package:ar_flutter_plugin_2/managers/ar_session_manager.dart';
 import 'package:ar_flutter_plugin_2/models/ar_anchor.dart';
 import 'package:ar_flutter_plugin_2/models/ar_hittest_result.dart';
 import 'package:ar_flutter_plugin_2/models/ar_node.dart';
+import 'package:ar_flutter_plugin_2/models/hand_gesture_frame.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:genai/rocket_parts.dart';
+import 'package:genai/src/hand_cursor.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:vector_math/vector_math_64.dart' hide Colors;
 
@@ -93,6 +95,16 @@ class _ARRocketPageState extends State<ARRocketPage>
   int _planeCount = 0;
   bool _showPlacementUi = true;
 
+  // Hand cursor. This page has no hand-driven model manipulation — the cursor
+  // is the whole of its hand support — so there is no HandGestureInterpreter
+  // here, only the one the controller owns.
+  bool _handTrackingEnabled = false;
+  bool _handTrackingWantedOnResume = false;
+  final GlobalKey _stackKey = GlobalKey();
+  late final HandCursorController _handCursor = HandCursorController(
+    rootKey: _stackKey,
+  );
+
   // Launch animation state
   Timer? _launchTimer;
   LaunchPhase _launchPhase = LaunchPhase.idle;
@@ -153,7 +165,55 @@ class _ARRocketPageState extends State<ARRocketPage>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _ensureCameraPermission(requestIfNeeded: false);
+      // Only if it was on when we paused: an app switch must not undo the
+      // app-bar toggle, or "switched off" lasts until the next notification.
+      if (_handTrackingWantedOnResume) unawaited(_enableHandTracking());
+    } else if (state == AppLifecycleState.paused) {
+      _handTrackingWantedOnResume = _handTrackingEnabled;
+      unawaited(_disableHandTracking());
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Hand cursor
+  // -------------------------------------------------------------------------
+
+  Future<void> _toggleHandTracking() async {
+    if (_handTrackingEnabled) {
+      await _disableHandTracking();
+      return;
+    }
+    await _enableHandTracking();
+  }
+
+  Future<void> _enableHandTracking() async {
+    final sessionManager = _sessionManager;
+    if (_handTrackingEnabled || !mounted || sessionManager == null) return;
+
+    final supported = await sessionManager.setHandTracking(true);
+    if (!mounted) {
+      if (supported) unawaited(sessionManager.setHandTracking(false));
+      return;
+    }
+    if (!supported) return;
+
+    setState(() => _handTrackingEnabled = true);
+  }
+
+  Future<void> _disableHandTracking() async {
+    _handCursor.clear();
+    if (!_handTrackingEnabled) return;
+    if (mounted) {
+      setState(() => _handTrackingEnabled = false);
+    } else {
+      _handTrackingEnabled = false;
+    }
+    await _sessionManager?.setHandTracking(false);
+  }
+
+  void _handleHandGestureFrame(HandGestureFrame frame) {
+    if (!_handTrackingEnabled || !mounted) return;
+    _handCursor.ingest(frame);
   }
 
   // -------------------------------------------------------------------------
@@ -243,6 +303,7 @@ class _ARRocketPageState extends State<ARRocketPage>
     sessionManager.onError = _handleSessionError;
     sessionManager.onPlaneDetected = _handlePlaneDetected;
     sessionManager.onPlaneOrPointTap = _handlePlaneOrPointTap;
+    sessionManager.onHandGesture = _handleHandGestureFrame;
 
     if (_isCameraPermissionGranted) {
       _initializeSession();
@@ -295,6 +356,10 @@ class _ARRocketPageState extends State<ARRocketPage>
           _message = 'Move your phone slowly to detect a flat surface.';
         }
       });
+      // Runs for the page's lifetime, not just after placement — the cursor
+      // has to reach the controls that come before it too. The app-bar toggle
+      // is the escape hatch for MediaPipe's continuous cost.
+      unawaited(_enableHandTracking());
     } catch (error) {
       _isConfiguringSession = false;
       _handleSessionError('Failed to start AR: $error');
@@ -748,6 +813,10 @@ class _ARRocketPageState extends State<ARRocketPage>
     unawaited(_countdownPlayer.dispose());
     unawaited(_enginePlayer.dispose());
     WidgetsBinding.instance.removeObserver(this);
+    if (_handTrackingEnabled) {
+      _sessionManager?.setHandTracking(false);
+    }
+    _handCursor.dispose();
     _sessionManager?.dispose();
     super.dispose();
   }
@@ -765,8 +834,19 @@ class _ARRocketPageState extends State<ARRocketPage>
         backgroundColor: Colors.transparent,
         elevation: 0,
         iconTheme: const IconThemeData(color: Colors.white),
+        leading: IconButton(
+          tooltip: _handTrackingEnabled
+              ? 'Disable hand gestures'
+              : 'Control with hand gestures',
+          onPressed: _toggleHandTracking,
+          icon: Icon(
+            _handTrackingEnabled ? Icons.back_hand : Icons.back_hand_outlined,
+            color: _handTrackingEnabled ? _primaryColor : Colors.white,
+          ),
+        ),
       ),
       body: Stack(
+        key: _stackKey,
         fit: StackFit.expand,
         children: [
           const ColoredBox(color: _backgroundColor),
@@ -823,6 +903,10 @@ class _ARRocketPageState extends State<ARRocketPage>
                 ),
               ),
             ),
+
+          // Last, so the cursor paints over every control it can press. It is
+          // IgnorePointer, so being on top costs the UI below nothing.
+          if (_handTrackingEnabled) HandCursorOverlay(controller: _handCursor),
         ],
       ),
     );
@@ -922,10 +1006,7 @@ class _RocketFactRail extends StatelessWidget {
 }
 
 class _RocketFactRailCard extends StatelessWidget {
-  const _RocketFactRailCard({
-    required this.factNumber,
-    required this.part,
-  });
+  const _RocketFactRailCard({required this.factNumber, required this.part});
 
   final int factNumber;
   final RocketPart part;
@@ -937,7 +1018,10 @@ class _RocketFactRailCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.black.withValues(alpha: 0.72),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _primaryColor.withValues(alpha: 0.42), width: 1.2),
+        border: Border.all(
+          color: _primaryColor.withValues(alpha: 0.42),
+          width: 1.2,
+        ),
         boxShadow: [
           BoxShadow(
             color: _primaryColor.withValues(alpha: 0.2),

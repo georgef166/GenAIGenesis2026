@@ -4,11 +4,19 @@ import 'package:ar_flutter_plugin_2/models/hand_gesture_frame.dart';
 
 /// A hand indicator for the on-screen overlay.
 class HandIndicator {
-  HandIndicator({required this.position, required this.isPinching});
+  HandIndicator({
+    required this.position,
+    required this.isPinching,
+    this.pinchRatio = 1.0,
+  });
 
   /// View-normalized position (0..1).
   final Offset position;
   final bool isPinching;
+
+  /// Smoothed thumb-index distance (~0.2 pinched, ~1.0 open). Drives the
+  /// cursor ring's continuous "about to click" contraction.
+  final double pinchRatio;
 }
 
 /// Commands emitted by [HandGestureInterpreter].
@@ -110,8 +118,27 @@ class HandGestureInterpreter {
 
   /// Latest smoothed hands, for overlay rendering.
   List<HandIndicator> get indicators => _hands
-      .map((h) => HandIndicator(position: h.position, isPinching: h.isPinching))
+      .map(
+        (h) => HandIndicator(
+          position: h.position,
+          isPinching: h.isPinching,
+          pinchRatio: h.pinchRatio,
+        ),
+      )
       .toList();
+
+  /// Drops all tracked hands and any gesture in flight.
+  ///
+  /// Feeding an empty frame is *not* equivalent: that is exactly the shape of
+  /// a detection dropout, so [graceMs] holds the gesture instead of ending it
+  /// and the next real tick resumes from a stale `_dragPoint`. Callers that
+  /// mean "stop" — the cursor snapping to a control, tracking being switched
+  /// off — must call this.
+  void reset() {
+    _hands.clear();
+    _lastSupportedTimestampMs = null;
+    _toIdle();
+  }
 
   /// Ingests one tick and returns the commands it produces (possibly empty).
   List<GestureCommand> ingest(HandGestureFrame frame) {

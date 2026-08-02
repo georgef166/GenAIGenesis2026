@@ -89,10 +89,66 @@ The app is **landscape-locked** (`SystemChrome.setPreferredOrientations` in `mai
 `_applyDragDelta` / `_modelScale` → `_applyModelTransform`, which recomposes
 `_modelNode.transform` from `_modelBasePosition + _modelOffset` and
 `_modelBaseScale * _modelScale` (clamped to 0.25–10× of `_generatedModelScale`,
-i.e. 3.5 cm–1.4 m). Nothing gesture-related mounts until `_modelNode != null`,
+i.e. 3.5 cm–1.4 m). The drag/zoom *transform* still needs `_modelNode != null`,
 because on that page a plane tap *is* the placement action; all of it is
 cleared in `_removePlacedModel`, the one choke point every reset routes
 through, so a new model never inherits the previous offset or scale.
+
+### The hand cursor
+
+`src/hand_cursor.dart` adds a virtual cursor on all three AR pages: the hand
+moves it, it magnetically snaps to a nearby control and highlights it, and a
+pinch clicks that control. `HandCursorController` owns a **second**
+`HandGestureInterpreter` at `smoothingAlpha 0.3` (the shared one's 0.5 is ~1
+frame at 15 Hz — fine for grabbing, jittery for pointing) and holds its last
+position for 300 ms through detection dropouts, because `indicators` drops a
+hand the instant it is missed. `HandCursorOverlay` is the single hand painter
+for all three pages; the diagram page's private `_HandOverlayPainter` was
+folded into it (`showSkeleton: true` keeps that page's landmark debug draw).
+
+Snapping is a throttled render-tree sweep for `RenderPointerListener`s under
+the page's `Stack` (`_stackKey`), so **no control needs registering**. Two
+non-obvious filters: candidates larger than 25% of the page are dropped (the
+full-screen touch drag/zoom `GestureDetector` is a pointer listener too, but it
+is not a control), and each survivor is confirmed with one real
+`hitTestInView`, which inherits `IgnorePointer`, z-order, clipping and scroll
+clipping for free. That probe uses the **cursor clamped into the candidate**,
+never the candidate's centre, and the click is dispatched at the same point: a
+container that passes the area cap contains its own opaque listener — the
+recents rail is one — so probing its centre confirms the *row* and the click
+lands in the gap between two cards, making every card unreachable. Clicking
+dispatches a
+`PointerDownEvent`/`PointerUpEvent` pair through `GestureBinding` at reserved
+pointer id `0x7A11`; down and up go out in one synchronous call, so no lost
+hand can leave a pointer down — a stuck synthetic pointer wedges the control
+against the next *real* finger and, in release, silently drops that finger's up.
+
+Two invariants come out of this. Hand tracking now starts when the AR session
+initialises and runs for the page's lifetime — it used to start only after
+placement on `ar_meshy_page`, which meant no frames arrived while the prompt
+panel (Generate, the mode/quality chips, the photo source, recents) was on
+screen. The cost is continuous MediaPipe next to ARCore; the **app-bar toggle**
+on all three pages is the escape hatch, and it lives in `leading`, not
+`actions`, because `_TopRightBackShell` draws its Back button over the
+top-right corner and buries anything there. And a pinch is a click *or* a grab,
+never both: while `HandCursorController.isSnapped` the page calls
+`HandGestureInterpreter.reset()` on its drag/zoom interpreter instead of
+ingesting the tick, so a gesture in flight ends instead of resuming later from
+a stale `_dragPoint`. Feeding an **empty** frame does not work and was a bug —
+that is the shape of a detection dropout, so `graceMs` rides it out for ~180 ms
+and the drag survives.
+
+The click edge is armed, not just edge-detected (`_clickArmed`): a click needs
+a hand seen *open* first. The interpreter rebuilds a hand that vanished for one
+frame from scratch and its hysteresis latches straight back to pinching, so a
+plain rising edge turns a single dropped detection frame — or a
+toggle-off/resume with fingers still closed — into a phantom second click. The
+300 ms position hold therefore holds the pinch state with it.
+
+Scope is deliberately clicks only. The prompt `TextField` needs the soft
+keyboard, and the panel is a `SingleChildScrollView` with a horizontal recents
+`ListView`, so a hand "drag" is ambiguous with scrolling. Touch stays live
+throughout — nothing is hidden or disabled while tracking runs.
 
 Both pages keep **two** pinch-start fields (`_handZoomScaleAtStart` /
 `_touchScaleAtStart`) on purpose: hand tracking keeps running while a finger is

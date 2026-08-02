@@ -19,6 +19,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:vector_math/vector_math_64.dart' hide Colors;
 
 import 'gesture_transform_math.dart';
+import 'hand_cursor.dart';
 import 'hand_gesture_interpreter.dart';
 import 'meshy_model_history.dart';
 import 'meshy_proxy_client.dart';
@@ -148,6 +149,7 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
 
   HandGestureInterpreter? _gestureInterpreter;
   bool _handTrackingEnabled = false;
+  bool _handTrackingWantedOnResume = false;
 
   /// Set once `setHandTracking` reported the device cannot do it (iOS < 14,
   /// MediaPipe load failure). Touch stays live either way; this only changes
@@ -155,6 +157,12 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
   bool _handTrackingUnavailable = false;
   bool _gestureHintVisible = false;
   Timer? _gestureHintTimer;
+
+  /// The hand cursor paints in — and snaps to controls inside — this box.
+  final GlobalKey _stackKey = GlobalKey();
+  late final HandCursorController _handCursor = HandCursorController(
+    rootKey: _stackKey,
+  );
 
   Timer? _poseTimer;
   bool _poseUpdateInFlight = false;
@@ -406,12 +414,15 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
       _ensureCameraPermission(requestIfNeeded: false);
       if (_modelNode != null) {
         _startPosePolling();
-        unawaited(_enableHandTracking());
       }
+      // Only if it was on when we paused: an app switch must not undo the
+      // app-bar toggle, or "switched off" lasts until the next notification.
+      if (_handTrackingWantedOnResume) unawaited(_enableHandTracking());
     } else if (state == AppLifecycleState.paused) {
       // The session is paused too, so every poll just logs a swallowed error.
       _poseTimer?.cancel();
       _poseTimer = null;
+      _handTrackingWantedOnResume = _handTrackingEnabled;
       unawaited(_disableHandTracking());
     }
   }
@@ -563,6 +574,12 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
         _sessionErrorMessage = null;
       });
       _syncReadyState();
+      // Hand tracking runs for the page's lifetime rather than only after
+      // placement: nearly every control worth clicking — Generate, the mode
+      // and quality chips, the photo source, the recents — lives in the prompt
+      // panel, which is on screen *before* anything is placed. The app-bar
+      // toggle is the escape hatch for MediaPipe's continuous cost.
+      unawaited(_enableHandTracking());
     } catch (error) {
       _isConfiguringSession = false;
       _handleSessionError('Failed to start AR: $error');
@@ -665,7 +682,11 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
       // _startPosePolling.
       _lastAnchorPose = Matrix4.fromFloat64List(hit.worldTransform.storage);
       _startPosePolling();
-      unawaited(_enableHandTracking());
+      // Hand tracking is already running (started at session init) and must
+      // not be re-enabled here — that would undo the app-bar toggle. The chip
+      // still has to flash: it only mounts once a model exists, so the flash
+      // at session init happened while it was not in the tree.
+      _flashGestureHint();
       if (usedFallbackSource) {
         _showTransientMessage(
           'Used the original generation URL because the saved local model '
@@ -729,7 +750,9 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
   Future<void> _updatePoses() async {
     final sessionManager = _sessionManager;
     final anchor = _modelAnchor;
-    if (_poseUpdateInFlight || !mounted || sessionManager == null ||
+    if (_poseUpdateInFlight ||
+        !mounted ||
+        sessionManager == null ||
         anchor == null) {
       return;
     }
@@ -757,6 +780,14 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _toggleHandTracking() async {
+    if (_handTrackingEnabled) {
+      await _disableHandTracking();
+      return;
+    }
+    await _enableHandTracking();
+  }
+
   Future<void> _enableHandTracking() async {
     if (_handTrackingEnabled || !mounted) {
       return;
@@ -773,10 +804,7 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
     );
 
     final supported = await sessionManager.setHandTracking(true);
-    // A reset landing inside that round trip leaves no model to manipulate;
-    // without this the tracker would keep running per-frame inference until
-    // the next place-then-remove.
-    if (!mounted || _modelNode == null) {
+    if (!mounted) {
       _gestureInterpreter = null;
       if (supported) {
         unawaited(sessionManager.setHandTracking(false));
@@ -805,6 +833,7 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
     // placement with a stale timer about to hide it.
     _gestureHintTimer?.cancel();
     _gestureInterpreter = null;
+    _handCursor.clear();
     if (mounted) {
       setState(() => _gestureHintVisible = false);
     }
@@ -839,10 +868,19 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
 
   void _handleHandGestureFrame(HandGestureFrame frame) {
     final interpreter = _gestureInterpreter;
-    if (!_handTrackingEnabled ||
-        interpreter == null ||
-        !mounted ||
-        _modelNode == null) {
+    if (!_handTrackingEnabled || interpreter == null || !mounted) {
+      return;
+    }
+
+    _handCursor.ingest(frame);
+
+    // A pinch is a click *or* a grab, never both. While the cursor is snapped
+    // to a control — or before a model exists — the drag/zoom machine is reset
+    // rather than fed, so a gesture in flight ends instead of resuming later
+    // from a stale point. An empty frame would not do: that is the shape of a
+    // dropout, which the interpreter's grace period deliberately rides out.
+    if (_modelNode == null || _handCursor.isSnapped) {
+      interpreter.reset();
       return;
     }
 
@@ -1336,7 +1374,10 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
     _modelScale = 1.0;
     _handZoomScaleAtStart = 1.0;
     _touchScaleAtStart = 1.0;
-    await _disableHandTracking();
+    // Hand tracking deliberately survives a reset: the cursor has to keep
+    // driving the prompt panel, which is exactly what comes next.
+    _gestureHintTimer?.cancel();
+    if (mounted) setState(() => _gestureHintVisible = false);
 
     final objectManager = _objectManager;
     final anchorManager = _anchorManager;
@@ -1527,6 +1568,7 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
     if (_handTrackingEnabled) {
       _sessionManager?.setHandTracking(false);
     }
+    _handCursor.dispose();
     _sessionManager?.dispose();
     _meshyClient?.close();
     super.dispose();
@@ -1548,8 +1590,21 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
         backgroundColor: Colors.transparent,
         elevation: 0,
         iconTheme: const IconThemeData(color: Colors.white),
+        leading: IconButton(
+          tooltip: _handTrackingEnabled
+              ? 'Disable hand gestures'
+              : 'Control with hand gestures',
+          onPressed: _toggleHandTracking,
+          icon: Icon(
+            _handTrackingEnabled ? Icons.back_hand : Icons.back_hand_outlined,
+            color: _handTrackingEnabled
+                ? Theme.of(context).colorScheme.primary
+                : Colors.white,
+          ),
+        ),
       ),
       body: Stack(
+        key: _stackKey,
         fit: StackFit.expand,
         children: [
           const ColoredBox(color: _backgroundColor),
@@ -1686,6 +1741,10 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
               url: panoramaUrl,
               onDismiss: () => setState(() => _panoramaUrl = null),
             ),
+
+          // Last, so the cursor paints over every control it can press. It is
+          // IgnorePointer, so being on top costs the UI below nothing.
+          if (_handTrackingEnabled) HandCursorOverlay(controller: _handCursor),
         ],
       ),
     );
