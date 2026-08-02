@@ -780,23 +780,28 @@ class _ARRocketPageState extends State<ARRocketPage>
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: Column(
+                  // spaceBetween instead of a Spacer: it leaves the overlay as
+                  // the only flex child, so Flexible can cap it at the height
+                  // actually left over — a Spacer would have split the space
+                  // 50/50 with it.
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     // Status / instruction overlay
-                    ARStatusOverlay(
-                      state: _state,
-                      message: _message,
-                      isHorizontalPlaneAvailable: _hasHorizontalPlane,
-                      primaryActionLabel: _primaryActionLabel,
-                      onPrimaryAction: _primaryActionLabel == null
-                          ? null
-                          : _handlePrimaryAction,
-                      showReset: _rocketNode != null,
-                      onReset: _resetRocket,
-                      planeCount: _planeCount,
-                      launchPhase: _launchPhase,
+                    Flexible(
+                      child: ARStatusOverlay(
+                        state: _state,
+                        message: _message,
+                        isHorizontalPlaneAvailable: _hasHorizontalPlane,
+                        primaryActionLabel: _primaryActionLabel,
+                        onPrimaryAction: _primaryActionLabel == null
+                            ? null
+                            : _handlePrimaryAction,
+                        showReset: _rocketNode != null,
+                        onReset: _resetRocket,
+                        planeCount: _planeCount,
+                        launchPhase: _launchPhase,
+                      ),
                     ),
-
-                    const Spacer(),
 
                     // "Explore parts" button — visible only after placement.
                     if (_state == ARPlacementState.placed)
@@ -1314,92 +1319,96 @@ class ARStatusOverlay extends StatelessWidget {
       ),
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(
-                  icon,
-                  color: _primaryColor,
-                  shadows: [
-                    BoxShadow(
-                      color: _primaryColor.withValues(alpha: 0.5),
-                      blurRadius: 8,
-                    ),
-                  ],
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    _titleForState(state).toUpperCase(),
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 1.2,
+        // Shrink-wraps to the content but never past the height it is given,
+        // so a short landscape screen scrolls instead of overflowing.
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    icon,
+                    color: _primaryColor,
+                    shadows: [
+                      BoxShadow(
+                        color: _primaryColor.withValues(alpha: 0.5),
+                        blurRadius: 8,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      _titleForState(state).toUpperCase(),
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 1.2,
+                      ),
                     ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Text(
-              message,
-              style: theme.textTheme.bodyMedium?.copyWith(color: _lightColor),
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                _OverlayChip(label: _planeChipLabel, icon: _planeChipIcon),
-                _OverlayChip(
-                  label: showReset ? 'Rocket placed' : 'Single rocket mode',
-                  icon: showReset
-                      ? Icons.rocket_launch_rounded
-                      : Icons.radio_button_checked_rounded,
-                ),
-                _OverlayChip(
-                  label: planeCount == 0
-                      ? 'No planes yet'
-                      : '$planeCount plane${planeCount == 1 ? '' : 's'} tracked',
-                  icon: Icons.layers_outlined,
-                ),
-                if (launchPhase != LaunchPhase.idle)
+                ],
+              ),
+              const SizedBox(height: 12),
+              Text(
+                message,
+                style: theme.textTheme.bodyMedium?.copyWith(color: _lightColor),
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _OverlayChip(label: _planeChipLabel, icon: _planeChipIcon),
                   _OverlayChip(
-                    label: launchPhase == LaunchPhase.lifting
-                        ? '🚀 Launching…'
-                        : '🌤 Cleared atmosphere',
-                    icon: launchPhase == LaunchPhase.lifting
+                    label: showReset ? 'Rocket placed' : 'Single rocket mode',
+                    icon: showReset
                         ? Icons.rocket_launch_rounded
-                        : Icons.cloud_rounded,
+                        : Icons.radio_button_checked_rounded,
                   ),
-              ],
-            ),
-            if (primaryActionLabel != null) ...[
-              const SizedBox(height: 16),
-              FilledButton.icon(
-                style: _buttonStyle,
-                onPressed: onPrimaryAction,
-                icon: Icon(
-                  state == ARPlacementState.permissionBlocked
-                      ? Icons.settings_rounded
-                      : Icons.videocam_rounded,
+                  _OverlayChip(
+                    label: planeCount == 0
+                        ? 'No planes yet'
+                        : '$planeCount plane${planeCount == 1 ? '' : 's'} tracked',
+                    icon: Icons.layers_outlined,
+                  ),
+                  if (launchPhase != LaunchPhase.idle)
+                    _OverlayChip(
+                      label: launchPhase == LaunchPhase.lifting
+                          ? '🚀 Launching…'
+                          : '🌤 Cleared atmosphere',
+                      icon: launchPhase == LaunchPhase.lifting
+                          ? Icons.rocket_launch_rounded
+                          : Icons.cloud_rounded,
+                    ),
+                ],
+              ),
+              if (primaryActionLabel != null) ...[
+                const SizedBox(height: 16),
+                FilledButton.icon(
+                  style: _buttonStyle,
+                  onPressed: onPrimaryAction,
+                  icon: Icon(
+                    state == ARPlacementState.permissionBlocked
+                        ? Icons.settings_rounded
+                        : Icons.videocam_rounded,
+                  ),
+                  label: Text(primaryActionLabel!),
                 ),
-                label: Text(primaryActionLabel!),
-              ),
+              ],
+              if (showReset) ...[
+                const SizedBox(height: 16),
+                FilledButton.icon(
+                  style: _buttonStyle,
+                  onPressed: onReset,
+                  icon: const Icon(Icons.refresh_rounded),
+                  label: const Text('RESET ROCKET'),
+                ),
+              ],
             ],
-            if (showReset) ...[
-              const SizedBox(height: 16),
-              FilledButton.icon(
-                style: _buttonStyle,
-                onPressed: onReset,
-                icon: const Icon(Icons.refresh_rounded),
-                label: const Text('RESET ROCKET'),
-              ),
-            ],
-          ],
+          ),
         ),
       ),
     );

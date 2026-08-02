@@ -8,6 +8,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:image_picker_platform_interface/image_picker_platform_interface.dart';
 
 import 'package:genai/src/ar_meshy_page.dart';
+// Its ARStatusOverlay is a different class that happens to share the name.
+import 'package:genai/src/ar_rocket_page.dart' as rocket;
 import 'package:genai/src/meshy_model_history.dart';
 
 void main() {
@@ -252,6 +254,164 @@ void main() {
         '"prompt":"a brass owl","error":"backend gave up"}');
     await tester.pump(const Duration(seconds: 3));
     await _tick(tester);
+  });
+
+  // The app is landscape-locked, so ~411 logical px of height is all the
+  // overlays ever get. The bottom prompt-panel reserve used to be a hardcoded
+  // 220, which left the 264 px status overlay 175 px to live in — the "bottom
+  // overflowed by 89 pixels" banner users saw on device.
+  group('landscape', () {
+    void useLandscapePhone(WidgetTester tester) {
+      tester.view.physicalSize = const Size(2340, 1080);
+      tester.view.devicePixelRatio = 2.625;
+      addTearDown(tester.view.reset);
+    }
+
+    testWidgets('the meshy page lays out without overflowing', (
+      WidgetTester tester,
+    ) async {
+      useLandscapePhone(tester);
+      _installFakes(
+        tester,
+        _FakeProxy(
+          createResponse: (202, '{"jobId":"job-3","status":"submitting"}'),
+          pollResponse: (200, '{"jobId":"job-3","status":"submitting"}'),
+        ),
+      );
+
+      await tester.pumpWidget(const MaterialApp(home: ARMeshyPage()));
+      await _tick(tester);
+
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('the status overlay scrolls rather than overflowing', (
+      WidgetTester tester,
+    ) async {
+      useLandscapePhone(tester);
+
+      // 175 px is exactly what the old hardcoded 220 bottom reserve left on
+      // this device, against ~264 px of worst case content (an action button
+      // *and* a reset button). It must scroll, not overflow.
+      const budget = 175.0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Align(
+              alignment: Alignment.topCenter,
+              child: SizedBox(
+                height: budget,
+                child: ARStatusOverlay(
+                  title: 'Model anchored',
+                  message:
+                      'Model placed. Reset to place it again or generate a '
+                      'new prompt.',
+                  icon: Icons.touch_app_rounded,
+                  planeChipLabel: 'Horizontal plane detected',
+                  generationChipLabel: 'Model ready',
+                  placementChipLabel: 'Model anchored',
+                  planeCount: 1,
+                  primaryActionLabel: 'Enable camera',
+                  onPrimaryAction: _noop,
+                  showReset: true,
+                  onReset: _noop,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(tester.takeException(), isNull);
+      // Squeezed into the height it was offered instead of overrunning it.
+      expect(tester.getSize(find.byType(ARStatusOverlay)).height, budget);
+      // Still reachable — by scrolling.
+      await tester.drag(find.byType(ARStatusOverlay), const Offset(0, -200));
+      await tester.pump();
+      expect(find.text('Reset placement'), findsOneWidget);
+    });
+
+    // Same latent bug, same fix: this overlay wants 328 px in its fullest
+    // state and the rocket page's Column only ever had ~319 px left for it
+    // once the "explore parts" button took its share.
+    testWidgets('the rocket overlay scrolls rather than overflowing', (
+      WidgetTester tester,
+    ) async {
+      useLandscapePhone(tester);
+
+      const budget = 175.0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Align(
+              alignment: Alignment.topCenter,
+              child: SizedBox(
+                height: budget,
+                child: rocket.ARStatusOverlay(
+                  state: rocket.ARPlacementState.placed,
+                  message: 'Rocket placed. Reset it to place it again.',
+                  isHorizontalPlaneAvailable: true,
+                  primaryActionLabel: null,
+                  onPrimaryAction: null,
+                  showReset: true,
+                  onReset: _noop,
+                  planeCount: 3,
+                  launchPhase: rocket.LaunchPhase.lifting,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(tester.takeException(), isNull);
+      expect(
+        tester.getSize(find.byType(rocket.ARStatusOverlay)).height,
+        budget,
+      );
+    });
+
+    testWidgets('the prompt panel lays out without overflowing', (
+      WidgetTester tester,
+    ) async {
+      useLandscapePhone(tester);
+      final controller = TextEditingController(text: 'a sunlit alpine meadow');
+      addTearDown(controller.dispose);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Align(
+              alignment: Alignment.bottomCenter,
+              // Mirrors how the page mounts the panel.
+              child: SingleChildScrollView(
+                child: MeshyPromptPanel(
+                  promptController: controller,
+                  helperText: 'Add a photo to expand into a world.',
+                  generateLabel: 'Generate world',
+                  onGenerate: _noop,
+                  kind: 'world',
+                  onPickImage: (_) {},
+                  recentModels: <MeshyModelRecord>[
+                    MeshyModelRecord(
+                      id: 'job-1',
+                      prompt: 'a brass owl automaton',
+                      localRelativePath: 'meshy_models/job-1.glb',
+                      originalGlbUrl: 'https://example.com/job-1.glb',
+                      createdAt: DateTime.utc(2026, 3, 15, 12),
+                      updatedAt: DateTime.utc(2026, 3, 15, 12),
+                      lastUsedAt: DateTime.utc(2026, 3, 15, 12),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(tester.takeException(), isNull);
+    });
   });
 
   testWidgets('a generation error reopens the prompt panel', (

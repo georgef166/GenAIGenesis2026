@@ -1237,21 +1237,23 @@ class _ARDiagramPageState extends State<ARDiagramPage>
             SafeArea(
               child: Padding(
                 padding: const EdgeInsets.all(16),
-                child: Column(
-                  children: [
-                    _StatusCard(
-                      state: _state,
-                      message: _message,
-                      planeCount: _planeCount,
-                      isPlaneAvailable: _hasHorizontalPlane,
-                      showReset: _rocketNode != null,
-                      primaryActionLabel: _primaryActionLabel,
-                      onPrimaryAction: _primaryActionLabel == null
-                          ? null
-                          : _handlePrimaryAction,
-                      onReset: _reset,
-                    ),
-                  ],
+                // Align, not a Column: it pins the card to the top the same
+                // way but hands it a *bounded* height, so the card's internal
+                // scroll view can kick in on a short landscape screen.
+                child: Align(
+                  alignment: Alignment.topCenter,
+                  child: _StatusCard(
+                    state: _state,
+                    message: _message,
+                    planeCount: _planeCount,
+                    isPlaneAvailable: _hasHorizontalPlane,
+                    showReset: _rocketNode != null,
+                    primaryActionLabel: _primaryActionLabel,
+                    onPrimaryAction: _primaryActionLabel == null
+                        ? null
+                        : _handlePrimaryAction,
+                    onReset: _reset,
+                  ),
                 ),
               ),
             ),
@@ -1476,59 +1478,63 @@ class _StatusCard extends StatelessWidget {
       ),
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(_icon(state), color: cs.primary),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    _title(state),
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w600,
+        // Shrink-wraps to the content but never past the height it is given,
+        // so a short landscape screen scrolls instead of overflowing.
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(_icon(state), color: cs.primary),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      _title(state),
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(
+                message,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: Colors.white.withValues(alpha: 0.9),
+                ),
+              ),
+              const SizedBox(height: 10),
+              // Plane count chip
+              _Chip(
+                label: planeCount == 0
+                    ? 'Scanning for surfaces…'
+                    : '$planeCount surface${planeCount == 1 ? '' : 's'} detected',
+                icon: planeCount > 0
+                    ? Icons.check_circle_outline_rounded
+                    : Icons.camera_alt_outlined,
+              ),
+              if (primaryActionLabel != null) ...[
+                const SizedBox(height: 14),
+                FilledButton.icon(
+                  onPressed: onPrimaryAction,
+                  icon: const Icon(Icons.videocam_rounded),
+                  label: Text(primaryActionLabel!),
                 ),
               ],
-            ),
-            const SizedBox(height: 10),
-            Text(
-              message,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: Colors.white.withValues(alpha: 0.9),
-              ),
-            ),
-            const SizedBox(height: 10),
-            // Plane count chip
-            _Chip(
-              label: planeCount == 0
-                  ? 'Scanning for surfaces…'
-                  : '$planeCount surface${planeCount == 1 ? '' : 's'} detected',
-              icon: planeCount > 0
-                  ? Icons.check_circle_outline_rounded
-                  : Icons.camera_alt_outlined,
-            ),
-            if (primaryActionLabel != null) ...[
-              const SizedBox(height: 14),
-              FilledButton.icon(
-                onPressed: onPrimaryAction,
-                icon: const Icon(Icons.videocam_rounded),
-                label: Text(primaryActionLabel!),
-              ),
+              if (showReset) ...[
+                const SizedBox(height: 14),
+                FilledButton.icon(
+                  onPressed: onReset,
+                  icon: const Icon(Icons.refresh_rounded),
+                  label: const Text('Reset diagram'),
+                ),
+              ],
             ],
-            if (showReset) ...[
-              const SizedBox(height: 14),
-              FilledButton.icon(
-                onPressed: onReset,
-                icon: const Icon(Icons.refresh_rounded),
-                label: const Text('Reset diagram'),
-              ),
-            ],
-          ],
+          ),
         ),
       ),
     );

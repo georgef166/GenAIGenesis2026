@@ -1253,7 +1253,16 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
           if (panoramaUrl == null)
             SafeArea(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 220),
+                // Reserve room for the bottom prompt panel. As a fraction it
+                // holds in both orientations — the hardcoded 220 it replaces
+                // was ~25% of a portrait phone but 54% of a landscape one,
+                // which starved the overlay and overflowed it by ~89px.
+                padding: EdgeInsets.fromLTRB(
+                  16,
+                  16,
+                  16,
+                  MediaQuery.sizeOf(context).height * 0.25,
+                ),
                 child: Align(
                   alignment: Alignment.topCenter,
                   child: ARStatusOverlay(
@@ -1473,80 +1482,84 @@ class ARStatusOverlay extends StatelessWidget {
       ),
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(icon, color: colorScheme.primary),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    title,
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w600,
+        // Shrink-wraps to the content but never past the height it is given,
+        // so a short landscape screen scrolls instead of overflowing.
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(icon, color: colorScheme.primary),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Text(
+                message,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: Colors.white.withValues(alpha: 0.92),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _OverlayChip(
+                    label: planeChipLabel,
+                    icon: Icons.layers_outlined,
+                  ),
+                  _OverlayChip(
+                    label: generationChipLabel,
+                    icon: Icons.auto_awesome_rounded,
+                  ),
+                  _OverlayChip(
+                    label: placementChipLabel,
+                    icon: showReset
+                        ? Icons.lock_outline_rounded
+                        : Icons.radio_button_checked_rounded,
+                  ),
+                  _OverlayChip(
+                    label: planeCount == 0
+                        ? 'No planes yet'
+                        : '$planeCount plane${planeCount == 1 ? '' : 's'} tracked',
+                    icon: Icons.grid_view_rounded,
+                  ),
+                ],
+              ),
+              if (primaryActionLabel != null) ...[
+                const SizedBox(height: 16),
+                FilledButton.icon(
+                  onPressed: onPrimaryAction,
+                  icon: Icon(
+                    primaryActionLabel == 'Open settings'
+                        ? Icons.settings_rounded
+                        : Icons.videocam_rounded,
+                  ),
+                  label: Text(primaryActionLabel!),
                 ),
               ],
-            ),
-            const SizedBox(height: 12),
-            Text(
-              message,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: Colors.white.withValues(alpha: 0.92),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                _OverlayChip(
-                  label: planeChipLabel,
-                  icon: Icons.layers_outlined,
-                ),
-                _OverlayChip(
-                  label: generationChipLabel,
-                  icon: Icons.auto_awesome_rounded,
-                ),
-                _OverlayChip(
-                  label: placementChipLabel,
-                  icon: showReset
-                      ? Icons.lock_outline_rounded
-                      : Icons.radio_button_checked_rounded,
-                ),
-                _OverlayChip(
-                  label: planeCount == 0
-                      ? 'No planes yet'
-                      : '$planeCount plane${planeCount == 1 ? '' : 's'} tracked',
-                  icon: Icons.grid_view_rounded,
+              if (showReset) ...[
+                const SizedBox(height: 16),
+                FilledButton.icon(
+                  onPressed: onReset,
+                  icon: const Icon(Icons.refresh_rounded),
+                  label: const Text('Reset placement'),
                 ),
               ],
-            ),
-            if (primaryActionLabel != null) ...[
-              const SizedBox(height: 16),
-              FilledButton.icon(
-                onPressed: onPrimaryAction,
-                icon: Icon(
-                  primaryActionLabel == 'Open settings'
-                      ? Icons.settings_rounded
-                      : Icons.videocam_rounded,
-                ),
-                label: Text(primaryActionLabel!),
-              ),
             ],
-            if (showReset) ...[
-              const SizedBox(height: 16),
-              FilledButton.icon(
-                onPressed: onReset,
-                icon: const Icon(Icons.refresh_rounded),
-                label: const Text('Reset placement'),
-              ),
-            ],
-          ],
+          ),
         ),
       ),
     );
