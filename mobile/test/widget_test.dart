@@ -1,6 +1,11 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:image_picker/image_picker.dart';
+// Re-exports ImageSource and XFile, and lets the tests below swap the picker.
+import 'package:image_picker_platform_interface/image_picker_platform_interface.dart';
 
 import 'package:genai/src/ar_meshy_page.dart';
 import 'package:genai/src/meshy_model_history.dart';
@@ -175,6 +180,229 @@ void main() {
 
     expect(requestedSource, ImageSource.gallery);
   });
+
+  testWidgets('collapse pill mirrors the generation state', (
+    WidgetTester tester,
+  ) async {
+    var taps = 0;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MeshyPromptPill(isGenerating: false, onTap: () => taps++),
+        ),
+      ),
+    );
+
+    expect(find.text('Prompt'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+
+    await tester.tap(find.byType(MeshyPromptPill));
+    await tester.pump();
+    expect(taps, 1);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MeshyPromptPill(isGenerating: true, onTap: () => taps++),
+        ),
+      ),
+    );
+
+    expect(find.text('Generating...'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+  });
+
+  testWidgets('accepting a generation collapses the panel behind a pill', (
+    WidgetTester tester,
+  ) async {
+    final responses = _FakeProxy(
+      createResponse: (202, '{"jobId":"job-1","status":"submitting",'
+          '"prompt":"a brass owl"}'),
+      pollResponse: (200, '{"jobId":"job-1","status":"previewing",'
+          '"prompt":"a brass owl","progress":42}'),
+    );
+    _installFakes(tester, responses);
+
+    await tester.pumpWidget(const MaterialApp(home: ARMeshyPage()));
+    await _tick(tester);
+
+    await tester.tap(find.text('Gallery'));
+    await _tick(tester);
+    await tester.enterText(find.byType(TextField), 'a brass owl');
+    await _tick(tester);
+
+    await tester.tap(find.text('Generate model'));
+    await _tick(tester);
+
+    expect(find.byType(MeshyPromptPanel), findsNothing);
+    expect(find.byType(MeshyPromptPill), findsOneWidget);
+    expect(find.text('Generating...'), findsOneWidget);
+
+    // The pill is the always-visible way back — the whole point of it living
+    // outside the panel it hides.
+    await tester.tap(find.byType(MeshyPromptPill));
+    await _tick(tester);
+
+    expect(find.byType(MeshyPromptPanel), findsOneWidget);
+    expect(find.byType(MeshyPromptPill), findsNothing);
+
+    // Let the poll loop end so no timer outlives the test.
+    responses.pollResponse = (200, '{"jobId":"job-1","status":"error",'
+        '"prompt":"a brass owl","error":"backend gave up"}');
+    await tester.pump(const Duration(seconds: 3));
+    await _tick(tester);
+  });
+
+  testWidgets('a generation error reopens the prompt panel', (
+    WidgetTester tester,
+  ) async {
+    _installFakes(
+      tester,
+      _FakeProxy(
+        createResponse: (202, '{"jobId":"job-2","status":"submitting",'
+            '"prompt":"a brass owl"}'),
+        pollResponse: (200, '{"jobId":"job-2","status":"error",'
+            '"prompt":"a brass owl","error":"backend gave up"}'),
+      ),
+    );
+
+    await tester.pumpWidget(const MaterialApp(home: ARMeshyPage()));
+    await _tick(tester);
+
+    await tester.tap(find.text('Gallery'));
+    await _tick(tester);
+    await tester.enterText(find.byType(TextField), 'a brass owl');
+    await _tick(tester);
+
+    await tester.tap(find.text('Generate model'));
+    await _tick(tester);
+
+    expect(find.byType(MeshyPromptPanel), findsOneWidget);
+    expect(find.byType(MeshyPromptPill), findsNothing);
+    expect(find.text('backend gave up'), findsWidgets);
+  });
 }
 
 void _noop() {}
+
+/// The page's "Recent Models" spinner never resolves off-device (path_provider
+/// has no test implementation), so `pumpAndSettle` would hang. Pump a fixed
+/// window instead — long enough for the 200 ms collapse animation.
+Future<void> _tick(WidgetTester tester) async {
+  for (var i = 0; i < 4; i++) {
+    await tester.pump(const Duration(milliseconds: 100));
+  }
+}
+
+/// Swaps the photo picker and the proxy transport for in-memory fakes so the
+/// page's generation flow can be driven without a device or a server.
+void _installFakes(WidgetTester tester, _FakeProxy proxy) {
+  final previousPicker = ImagePickerPlatform.instance;
+  ImagePickerPlatform.instance = _FakeImagePicker();
+  addTearDown(() => ImagePickerPlatform.instance = previousPicker);
+
+  final previousOverrides = HttpOverrides.current;
+  HttpOverrides.global = _FakeHttpOverrides(proxy);
+  addTearDown(() => HttpOverrides.global = previousOverrides);
+}
+
+class _FakeProxy {
+  _FakeProxy({required this.createResponse, required this.pollResponse});
+
+  (int, String) createResponse;
+  (int, String) pollResponse;
+
+  (int, String) respond(String method) =>
+      method == 'POST' ? createResponse : pollResponse;
+}
+
+class _FakeImagePicker extends ImagePickerPlatform {
+  /// A 1x1 PNG: the panel renders the picked bytes, so they have to decode.
+  static final _pixel = base64Decode(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAE'
+    'hQGAhKmMIQAAAABJRU5ErkJggg==',
+  );
+
+  @override
+  Future<XFile?> getImageFromSource({
+    required ImageSource source,
+    ImagePickerOptions options = const ImagePickerOptions(),
+  }) async => XFile.fromData(_pixel);
+}
+
+class _FakeHttpOverrides extends HttpOverrides {
+  _FakeHttpOverrides(this.proxy);
+
+  final _FakeProxy proxy;
+
+  @override
+  HttpClient createHttpClient(SecurityContext? context) =>
+      _FakeHttpClient(proxy);
+}
+
+class _FakeHttpClient implements HttpClient {
+  _FakeHttpClient(this.proxy);
+
+  final _FakeProxy proxy;
+
+  @override
+  Future<HttpClientRequest> openUrl(String method, Uri url) async =>
+      _FakeHttpClientRequest(proxy.respond(method));
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
+}
+
+class _FakeHttpClientRequest implements HttpClientRequest {
+  _FakeHttpClientRequest(this.response);
+
+  final (int, String) response;
+
+  @override
+  final HttpHeaders headers = _FakeHttpHeaders();
+
+  @override
+  void write(Object? object) {}
+
+  @override
+  Future<HttpClientResponse> close() async =>
+      _FakeHttpClientResponse(response.$1, response.$2);
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
+}
+
+class _FakeHttpHeaders implements HttpHeaders {
+  @override
+  void set(String name, Object value, {bool preserveHeaderCase = false}) {}
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
+}
+
+class _FakeHttpClientResponse extends Stream<List<int>>
+    implements HttpClientResponse {
+  _FakeHttpClientResponse(this.statusCode, this.body);
+
+  @override
+  final int statusCode;
+
+  final String body;
+
+  @override
+  StreamSubscription<List<int>> listen(
+    void Function(List<int> event)? onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) => Stream<List<int>>.value(utf8.encode(body)).listen(
+    onData,
+    onError: onError,
+    onDone: onDone,
+    cancelOnError: cancelOnError,
+  );
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
+}

@@ -113,6 +113,7 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
   bool _hasInitializedSession = false;
   bool _isConfiguringSession = false;
   bool _isLoadingHistory = true;
+  bool _promptPanelCollapsed = false;
   int _planeCount = 0;
   int _generationToken = 0;
   int _pollRetryAttempt = 0;
@@ -725,6 +726,9 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
 
       setState(() {
         _currentJob = createdJob;
+        // Only once the proxy has actually taken the job: a validation bounce
+        // above leaves the panel up so the user can fix the prompt in place.
+        _promptPanelCollapsed = true;
       });
       await _pollGenerationJob(generationToken, createdJob.jobId);
     } catch (error) {
@@ -1006,6 +1010,7 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
       _sessionErrorMessage = null;
       _generationKind = 'object';
       _panoramaUrl = null;
+      _promptPanelCollapsed = true;
       _recentModels
         ..clear()
         ..addAll(records);
@@ -1091,6 +1096,9 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
           : MeshyGenerationStage.error;
       _generationErrorMessage = message;
       _pollRetryAttempt = 0;
+      // A failure puts the user straight back to editing, so re-open. Success
+      // deliberately stays collapsed: the next act is tapping a plane.
+      _promptPanelCollapsed = false;
     });
     _syncReadyState();
   }
@@ -1273,28 +1281,51 @@ class _ARMeshyPageState extends State<ARMeshyPage> with WidgetsBindingObserver {
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: Align(
-                  alignment: Alignment.bottomCenter,
-                  child: SingleChildScrollView(
-                    child: MeshyPromptPanel(
-                      promptController: _promptController,
-                      helperText: _promptHelperText,
-                      generateLabel: _generateButtonLabel,
-                      onGenerate: canGenerate ? _handleGeneratePressed : null,
-                      recentModels: _recentModels,
-                      isLoadingRecentModels: _isLoadingHistory,
-                      onSelectRecentModel: _isGenerating
-                          ? null
-                          : _handleRecentModelSelected,
-                      activeModelId: _activeModel?.id,
-                      kind: _generationKind,
-                      onKindChanged: _isGenerating ? null : _handleKindChanged,
-                      imageBytes: _generationImageBytes,
-                      onPickImage: _isGenerating ? null : _handlePickImage,
-                      worldSteps: _worldSteps,
-                      onWorldStepsChanged: _isGenerating
-                          ? null
-                          : _handleWorldStepsChanged,
-                    ),
+                  alignment: _promptPanelCollapsed
+                      ? Alignment.bottomRight
+                      : Alignment.bottomCenter,
+                  child: AnimatedSwitcher(
+                    duration: MediaQuery.disableAnimationsOf(context)
+                        ? Duration.zero
+                        : const Duration(milliseconds: 200),
+                    // The pill is a sibling of the panel under the *same*
+                    // condition, never a child of it, so collapsing can never
+                    // strand the user — the way the deleted `_showPlacementUi`
+                    // flag did by hiding its own re-open control.
+                    child: _promptPanelCollapsed
+                        ? MeshyPromptPill(
+                            isGenerating: _isGenerating,
+                            onTap: () =>
+                                setState(() => _promptPanelCollapsed = false),
+                          )
+                        : SingleChildScrollView(
+                            child: MeshyPromptPanel(
+                              promptController: _promptController,
+                              helperText: _promptHelperText,
+                              generateLabel: _generateButtonLabel,
+                              onGenerate: canGenerate
+                                  ? _handleGeneratePressed
+                                  : null,
+                              recentModels: _recentModels,
+                              isLoadingRecentModels: _isLoadingHistory,
+                              onSelectRecentModel: _isGenerating
+                                  ? null
+                                  : _handleRecentModelSelected,
+                              activeModelId: _activeModel?.id,
+                              kind: _generationKind,
+                              onKindChanged: _isGenerating
+                                  ? null
+                                  : _handleKindChanged,
+                              imageBytes: _generationImageBytes,
+                              onPickImage: _isGenerating
+                                  ? null
+                                  : _handlePickImage,
+                              worldSteps: _worldSteps,
+                              onWorldStepsChanged: _isGenerating
+                                  ? null
+                                  : _handleWorldStepsChanged,
+                            ),
+                          ),
                   ),
                 ),
               ),
@@ -1516,6 +1547,62 @@ class ARStatusOverlay extends StatelessWidget {
               ),
             ],
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The only way back to a collapsed [MeshyPromptPanel]. It must always be
+/// rendered by whatever hides the panel, and never from inside the panel's own
+/// subtree.
+class MeshyPromptPill extends StatelessWidget {
+  const MeshyPromptPill({
+    super.key,
+    required this.isGenerating,
+    required this.onTap,
+  });
+
+  final bool isGenerating;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Material(
+      color: const Color(0xFF10151F).withValues(alpha: 0.92),
+      clipBehavior: Clip.antiAlias,
+      shape: StadiumBorder(
+        side: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (isGenerating)
+                const SizedBox.square(
+                  dimension: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              else
+                Icon(
+                  Icons.edit_rounded,
+                  size: 18,
+                  color: theme.colorScheme.primary,
+                ),
+              const SizedBox(width: 10),
+              Text(
+                isGenerating ? 'Generating...' : 'Prompt',
+                style: theme.textTheme.labelLarge?.copyWith(
+                  color: Colors.white,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

@@ -116,6 +116,14 @@ directory, and stores only its file URI on the job. The existing asset route
 streams that file to the phone, so neither the base64 nor decoded bytes stay in
 the job map.
 
+Accepting a job — and loading a recent model — collapses the bottom prompt
+panel to a `MeshyPromptPill` so it stops covering the AR view; a generation
+error re-opens it, success leaves it collapsed because the next act is tapping
+a plane. The pill is rendered by the *same* condition that hides the panel and
+never from inside it: this page's deleted `_showPlacementUi` flag hid its own
+re-open control and left the screen unreachable, which is why placement itself
+still hides nothing (`_handlePlaneOrPointTap`).
+
 World placement is not implemented yet: a finished world shows its `panoramaUrl` flat and full-screen with a dismiss button, and nothing is cached or anchored. The inverted sky sphere is the next milestone.
 
 **The phone cannot reach the backend**, so `GET /api/meshy/asset/:jobId/:name` (`model.glb`, `sky.glb`, `panorama.jpg`) opens the upstream URL and returns the `HttpClientResponse` as the shelf body — it is already a `Stream<List<int>>`, so nothing buffers on the laptop. `_getGenerationJob` rewrites every outgoing `glbUrl`/`panoramaUrl` onto that route using `request.requestedUri`, i.e. the Host header the phone actually dialled, so no LAN IP is configured anywhere. A URL handed to the client is **always** a proxy URL.
