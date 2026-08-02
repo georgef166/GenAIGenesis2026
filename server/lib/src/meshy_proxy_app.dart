@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:genai_server/src/glb_repack.dart';
 import 'package:shelf/shelf.dart';
 
 class MeshyProxyApp {
@@ -936,8 +937,11 @@ class Hunyuan3dHttpApi extends TencentHttpApi {
           );
         }
 
+        // Hunyuan3D embeds its textures as `data:` URIs and mislabels JPEG as
+        // PNG; Android's loader refuses both. Repack once, here, so the phone
+        // only ever sees a spec-correct GLB.
         final file = File('${_assetDirectory.path}/$taskId.glb');
-        await file.writeAsBytes(bytes, flush: true);
+        await file.writeAsBytes(repackGlbDataUriImages(bytes), flush: true);
         return MeshyTask(
           id: taskId,
           status: status!,

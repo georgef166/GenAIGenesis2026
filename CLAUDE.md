@@ -116,6 +116,17 @@ directory, and stores only its file URI on the job. The existing asset route
 streams that file to the phone, so neither the base64 nor decoded bytes stay in
 the job map.
 
+`src/glb_repack.dart` rewrites that GLB on the way to disk and is **not**
+redundant: Hunyuan3D exports through pygltflib, which embeds both textures as
+base64 `data:` URIs *and* labels the JPEG base-colour map `image/png`. Android's
+Filament loader rejects both, so an object generated fine and then failed to
+place with "Could not attach the generated model to that anchor" while worlds
+were unaffected. `repackGlbDataUriImages` moves each `data:` image into the BIN
+chunk as a `bufferView`, sniffing the real mime type from the payload's magic
+bytes rather than trusting the declared one, and rewrites the chunk lengths. A
+GLB without `data:` images — every world `sky.glb` — and anything unparseable
+comes back untouched, so a repack failure can never be worse than no repack.
+
 Accepting a job — and loading a recent model — collapses the bottom prompt
 panel to a `MeshyPromptPill` so it stops covering the AR view; a generation
 error re-opens it, success leaves it collapsed because the next act is tapping
